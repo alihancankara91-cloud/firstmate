@@ -185,8 +185,8 @@ For target project repos shipped through their own no-mistakes pipeline, commits
 The firstmate repo itself is the exception: its `.no-mistakes/` directory is local state, stays gitignored, and is rejected by CI if tracked.
 PR-based task merges go through `bin/fm-pr-merge.sh`, which records `pr=` and any available `pr_head=` through `bin/fm-pr-check.sh` before calling `gh-axi pr merge`.
 The helper requires a full `https://github.com/<owner>/<repo>/pull/<n>` URL, invokes `gh-axi pr merge <n> --repo <owner>/<repo>`, defaults to `--squash`, preserves explicit merge-method flags, and rejects malformed URLs or repo override flags before recording merge state; a well-formed GitLab merge request URL (see [docs/gitlab-merge-watch.md](gitlab-merge-watch.md)) is refused too, explicitly, rather than sent to the wrong forge.
-Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be landed before the worktree is returned.
-[`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the landed-work proofs, PR-discovery fallback, and stale-lock recovery procedure.
+Teardown is fail-closed for ship worktrees: dirty worktrees refuse, committed work must be landed before the worktree is returned, and - on top of that - the work must clear the delivery gate: verified remote delivery through the raised PR's own forge-side file list, or content already on the remote default branch, with a loud recorded override as the only exception.
+[`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the landed-work proofs, PR-discovery fallback, and stale-lock recovery procedure; [`bin/fm-delivery-lib.sh`](../bin/fm-delivery-lib.sh)'s header owns the delivery-gate contract.
 
 ## Optional X mode
 
