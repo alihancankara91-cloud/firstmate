@@ -159,6 +159,17 @@ run_teardown() {
     "$TEARDOWN" task-x1 "$@"
 }
 
+run_scout_teardown() {
+  local case_dir=$1; shift
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_HOME="$case_dir" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 "$@"
+}
+
 run_spawn() {
   local case_dir=$1; shift
   FM_ROOT_OVERRIDE="$ROOT" \
@@ -444,22 +455,114 @@ test_spawn_requires_accepts_delivered_predecessor() {
   pass "a dependent spawn passes the gate once durable delivery evidence exists"
 }
 
-test_spawn_requires_accepts_scout_report() {
+test_spawn_requires_refuses_bare_scout_report() {
   local case_dir rc
   case_dir=$(make_case requires-scout)
   mkdir -p "$case_dir/projects" "$case_dir/data/scout-z9"
+  # A report file only proves a worker wrote a file. Firstmate's scout gates
+  # (report check + unresolved-decision completion gate) are what produce
+  # delivered.md, and only that record satisfies a dependency.
   printf '# findings\n' > "$case_dir/data/scout-z9/report.md"
 
   set +e
-  run_spawn "$case_dir" task-y2 "$case_dir/nonexistent-project" --requires scout-z9 \
+  run_spawn "$case_dir" task-y2 "$case_dir/project" --requires scout-z9 \
     > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e
 
-  assert_not_contains "$(cat "$case_dir/stderr")" 'has not cleared the delivery gate' \
-    "requires-scout: a finished scout's report satisfies the dependency"
-  [ "$rc" -ne 0 ] || fail "requires-scout: setup error - spawn unexpectedly succeeded"
-  pass "a dependent spawn accepts a finished scout's report as delivery evidence"
+  expect_code 1 "$rc" "requires-scout: a bare scout report must not satisfy a dependency"
+  grep -q 'has not cleared the delivery gate' "$case_dir/stderr" \
+    || fail "requires-scout: refusal must name the delivery gate"
+  assert_absent "$case_dir/state/task-y2.meta" "requires-scout: no task state may be created"
+  pass "a dependent spawn refuses on a bare scout report with no gate-written evidence"
+}
+
+# A scout that cleared BOTH of its teardown gates earns the same durable
+# evidence a ship task earns from the delivery gate.
+test_scout_teardown_records_delivery_and_unblocks_requires() {
+  local case_dir rc
+  if ! command -v tasks-axi >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+    echo "skip: tasks-axi/jq not found (scout delivery evidence case)"
+    return 0
+  fi
+  case_dir=$(make_case scout-delivers)
+  cp "$ROOT/.tasks.toml" "$case_dir/.tasks.toml"
+  cat > "$case_dir/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+
+## Done
+EOF
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=fm-task-x1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=scout" \
+    "mode=scout" \
+    "decisions_reviewed=1"
+  mkdir -p "$case_dir/data/task-x1"
+  printf '# findings\n' > "$case_dir/data/task-x1/report.md"
+
+  set +e
+  run_scout_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "scout-delivers: a scout that cleared both gates must tear down"
+  assert_present "$case_dir/data/task-x1/delivered.md" \
+    "scout-delivers: teardown must record durable delivery evidence once both scout gates pass"
+  assert_grep 'unresolved-decision completion gate' "$case_dir/data/task-x1/delivered.md" \
+    "scout-delivers: the evidence must name the gates it rests on"
+
+  mkdir -p "$case_dir/projects"
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/nonexistent-project" --requires task-x1 \
+    > "$case_dir/spawn-stdout" 2> "$case_dir/spawn-stderr"
+  rc=$?
+  set -e
+  assert_not_contains "$(cat "$case_dir/spawn-stderr")" 'has not cleared the delivery gate' \
+    "scout-delivers: a subsequent --requires must pass the gate"
+  [ "$rc" -ne 0 ] || fail "scout-delivers: setup error - spawn unexpectedly succeeded"
+  pass "scout teardown records delivery evidence after both gates and unblocks --requires"
+}
+
+# --- nothing produced is not delivery ---------------------------------------
+
+test_empty_net_work_tears_down_without_minting_evidence() {
+  local case_dir rc
+  case_dir=$(make_case empty-net-work)
+  write_meta "$case_dir" no-mistakes ship
+  # A worktree that produced nothing: no commits, no diff against the default
+  # branch, no recorded expectations. There is nothing to verify, so teardown
+  # may clear the debris - but it must not mint delivery evidence for it.
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "empty-net-work: a contentless worktree is debris, not a refusal"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "empty-net-work: teardown printed a REFUSED line"
+  grep -q 'nothing was produced to deliver' "$case_dir/stdout" \
+    || fail "empty-net-work: teardown must say why no evidence was recorded"
+  grep -q 'fm-delivery-gate.sh expect' "$case_dir/stdout" \
+    || fail "empty-net-work: the not-applicable output must name the resolutions"
+  assert_absent "$case_dir/data/task-x1/delivered.md" \
+    "empty-net-work: a task that produced nothing must not gain delivery evidence"
+
+  mkdir -p "$case_dir/projects"
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/project" --requires task-x1 \
+    > "$case_dir/spawn-stdout" 2> "$case_dir/spawn-stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "empty-net-work: a dependent spawn must still refuse"
+  grep -q 'has not cleared the delivery gate' "$case_dir/spawn-stderr" \
+    || fail "empty-net-work: refusal must name the delivery gate"
+  grep -q 'fm-delivery-gate.sh expect' "$case_dir/spawn-stderr" \
+    || fail "empty-net-work: the spawn refusal must name the resolutions"
+  pass "an empty-net-work task tears down, records no evidence, and keeps --requires refusing"
 }
 
 # --- local-only mode with no recorded deliverables: containment is proved,
@@ -528,6 +631,36 @@ test_local_only_teardown_records_no_delivery_when_fork_remote_not_contained_loca
   pass "local-only teardown with unmerged fork-remote work records no delivery evidence and --requires keeps refusing"
 }
 
+# Recording expectations may only make the gate stricter. A deliverable path
+# that already exists in the local default branch says nothing about THIS task.
+test_local_only_deliverable_present_but_work_not_contained_refuses() {
+  local case_dir rc
+  case_dir=$(make_case local-only-deliverable-not-contained)
+  write_meta "$case_dir" local-only ship
+  # The promised path is already tracked on local main before the task starts.
+  printf '%s\n' "baseline" > "$case_dir/project/tracked.txt"
+  git -C "$case_dir/project" add -- tracked.txt
+  git -C "$case_dir/project" -c user.email=t@t -c user.name=t commit -q -m "pre-existing tracked file"
+  # The task edits it and pushes to a fork - never merged into local main.
+  wt_commit_file "$case_dir" tracked.txt "the change"
+  add_fork_with_pushed_branch "$case_dir"
+  run_gate "$case_dir" expect task-x1 tracked.txt >/dev/null
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "local-only-deliverable-not-contained: an existing path must not stand in for the work"
+  grep -q 'NOT contained in that branch' "$case_dir/stderr" \
+    || fail "local-only-deliverable-not-contained: refusal must name the missing containment proof"
+  grep -q 'fm-delivery-gate.sh override' "$case_dir/stderr" \
+    || fail "local-only-deliverable-not-contained: refusal must name the resolutions"
+  assert_absent "$case_dir/data/task-x1/delivered.md" \
+    "local-only-deliverable-not-contained: no delivery evidence may be recorded"
+  pass "local-only recorded deliverables never substitute for the containment proof"
+}
+
 test_spawn_requires_rejects_invalid_id() {
   local case_dir rc
   case_dir=$(make_case requires-invalid)
@@ -557,9 +690,12 @@ test_teardown_refuses_pushed_branch_without_pr
 test_teardown_passes_verified_pr_and_records_evidence
 test_spawn_requires_refuses_without_evidence
 test_spawn_requires_accepts_delivered_predecessor
-test_spawn_requires_accepts_scout_report
+test_spawn_requires_refuses_bare_scout_report
+test_scout_teardown_records_delivery_and_unblocks_requires
+test_empty_net_work_tears_down_without_minting_evidence
 test_spawn_requires_rejects_invalid_id
 test_local_only_teardown_records_delivery_when_head_contained_in_local_main
 test_local_only_teardown_records_no_delivery_when_fork_remote_not_contained_locally
+test_local_only_deliverable_present_but_work_not_contained_refuses
 
 echo "all fm-delivery-gate tests passed"

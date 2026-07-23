@@ -40,23 +40,40 @@
 #   NOT SATISFIABLE BY ASSERTION: every check reads the remote, the forge, or
 #   git object facts. No status line, report, or worker claim is consulted.
 #
+#   NOTHING PRODUCED IS NOT DELIVERY: when the worktree's net diff against the
+#   default branch is empty AND no expected deliverable paths are recorded,
+#   there is nothing to verify, so the gate returns not-applicable with evidence
+#   saying exactly that. Teardown of such a contentless worktree proceeds (it is
+#   debris cleanup, not a completion claim) but NO delivered.md is written, so a
+#   later fm-spawn --requires on that task stays closed. Work that landed by
+#   fast-forward or rebase is indistinguishable from a contentless worktree in
+#   git - both leave HEAD reachable from the default branch with an empty net
+#   diff - so record the expected deliverable paths (bin/fm-delivery-gate.sh
+#   expect) to make such a task verifiable instead of guessing.
+#
 # Scope: kind=ship only. Scouts deliver a report, secondmates are not work
-# items - both are not-applicable. mode=local-only tasks have no remote PR;
-# for them the gate verifies recorded expected deliverable paths against the
-# local default branch tree when any are recorded. When none are recorded,
-# the gate attempts the same containment proof Arm R uses against the remote
-# default branch (ancestry, or merge-tree write-tree equality) but against
-# the LOCAL default branch - if and only if that proof holds does it pass and
-# record delivery, with evidence naming the observed containment. The proof
-# is never assumed from teardown being reached or from a completion claim;
-# if it cannot be established (uninspectable worktree, undeterminable
-# default branch, or content genuinely not contained - e.g. the legitimate
-# fork-remote local-only flow), the result stays not-applicable exactly as
-# before: teardown's own local-only refusal remains the sole owner of
-# whether teardown proceeds, and no delivered.md is written, so a later
-# --requires on that predecessor keeps refusing fail-closed. The loud
-# recorded override remains the only other path to a pass. bin/fm-merge-local.sh
-# and teardown's existing local-only refusal own the rest of that mode's rigor.
+# items - both are not-applicable to the verification arms; a scout's durable
+# delivery evidence is written by bin/fm-teardown.sh through
+# fm_delivery_record_scout_report, strictly after its report-exists check and
+# the unresolved-decision completion gate have BOTH passed.
+# mode=local-only tasks have no remote PR; for them the gate proves the work is
+# contained in the LOCAL default branch with the same technique Arm R uses
+# against the remote one (ancestry, or merge-tree write-tree equality). When
+# expected deliverable paths are recorded, each must additionally exist in that
+# branch's tree - additionally, never instead: a recorded path existing in the
+# local default branch proves something about the branch, not about THIS task's
+# work, so recording expectations may only make the gate stricter. The proof is
+# never assumed from teardown being reached or from a completion claim; if it
+# cannot be established (uninspectable worktree, undeterminable default branch,
+# or content genuinely not contained - e.g. the legitimate fork-remote
+# local-only flow), the result is not-applicable when nothing was promised and
+# refused when expectations were recorded: teardown's own local-only refusal
+# remains the sole owner of whether teardown proceeds, and no delivered.md is
+# written, so a later --requires on that predecessor keeps refusing fail-closed.
+# Every such not-applicable and refusal names the actual resolutions - land the
+# work in the local default branch and tear down, record expected deliverable
+# paths, or the loud recorded override. bin/fm-merge-local.sh and teardown's
+# existing local-only refusal own the rest of that mode's rigor.
 #
 # Expected deliverable paths are recorded by FIRSTMATE (not the worker) as
 # repeated `deliverable=<repo-relative-path>` lines in state/<id>.meta, via
@@ -73,8 +90,16 @@
 #
 # Durable evidence: a verify pass writes data/<id>/delivered.md (survives
 # teardown, like a scout report). bin/fm-spawn.sh's --requires reads exactly
-# that record - a dependent step cannot start on a predecessor that never
-# cleared this gate.
+# that record and NOTHING else - a dependent step cannot start on a predecessor
+# that never cleared this gate. A bare data/<id>/report.md does not satisfy a
+# dependency: a report file proves a worker wrote a file, not that firstmate's
+# gates passed, which is why a scout's delivered.md is written by teardown only
+# after both scout gates verify. delivered.md is FIRSTMATE-OWNED - written only
+# by this library, called from bin/fm-teardown.sh and bin/fm-delivery-gate.sh
+# verify, and never named in a worker brief or scaffold (bin/fm-brief.sh does
+# not mention it). That ownership rests on this repo's confused-not-adversarial
+# worker threat model, the same rationale as the check-trust binding: a worker
+# is never asked to produce this file, so it cannot be produced by mistake.
 #
 # Enforcement points (each a hard refusal, not a warning):
 #   - bin/fm-teardown.sh: a non-force ship teardown in a PR mode must pass this
@@ -164,6 +189,21 @@ _fm_delivery_default_branch() {
   return 1
 }
 
+# _fm_delivery_base_ref <wt> <branch>: print a resolvable git ref for <branch>,
+# preferring the remote-tracking ref (what the forge actually holds) over the
+# local one. Non-zero when neither exists, so callers fail closed instead of
+# diffing against nothing.
+_fm_delivery_base_ref() {
+  local wt=$1 branch=$2
+  [ -n "$branch" ] || return 1
+  if git -C "$wt" rev-parse --quiet --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+    printf '%s\n' "refs/remotes/origin/$branch"
+    return 0
+  fi
+  git -C "$wt" show-ref --verify --quiet "refs/heads/$branch" || return 1
+  printf '%s\n' "refs/heads/$branch"
+}
+
 # _fm_delivery_local_paths <wt> <default-ref>: the net repo-relative paths the
 # worktree's work changed, relative to the merge-base with <default-ref>.
 # Non-zero when the diff cannot be computed (fail closed at the caller).
@@ -172,6 +212,26 @@ _fm_delivery_local_paths() {
   base=$(git -C "$wt" merge-base "$default_ref" HEAD 2>/dev/null) || return 1
   [ -n "$base" ] || return 1
   git -C "$wt" diff --name-only "$base" HEAD -- 2>/dev/null
+}
+
+# _fm_delivery_net_work <wt>: the worktree's net changed paths against the
+# project's default branch. Empty output with a zero exit means the worktree
+# produced nothing verifiable; a non-zero exit means the question could not be
+# answered, which callers must never read as "nothing was produced".
+_fm_delivery_net_work() {
+  local wt=$1 default ref
+  default=$(_fm_delivery_default_branch "$wt") || return 1
+  ref=$(_fm_delivery_base_ref "$wt" "$default") || return 1
+  _fm_delivery_local_paths "$wt" "$ref"
+}
+
+# _fm_delivery_resolutions <id>: the one canonical list of what actually clears the
+# gate, appended to every not-applicable and refusal that leaves a task without
+# delivery evidence. A refusal that does not say what to do next gets worked
+# around instead of resolved.
+_fm_delivery_resolutions() {
+  local id=$1
+  printf '%s' "land the work in the local default branch and tear down (bin/fm-merge-local.sh), record the expected deliverable paths (bin/fm-delivery-gate.sh expect $id <path>...), or record the loud exception (bin/fm-delivery-gate.sh override $id --reason '<why>')"
 }
 
 # _fm_delivery_pr_target <meta> <wt> <branch>: print the PR url or number to
@@ -263,7 +323,7 @@ _fm_delivery_head_contained() {
 # non-zero on any failure. On success appends evidence including the file list.
 _fm_delivery_arm_pr() {
   local meta=$1 wt=$2 branch=$3 deliverables=$4
-  local target view state pr_head files local_paths p base default missing
+  local target view state pr_head files local_paths p base base_branch missing
   target=$(_fm_delivery_pr_target "$meta" "$wt" "$branch") || {
     _fm_delivery_reason "no pull request found for the work (no pr= recorded and no PR matches branch '$branch' on the forge)"
     return 1
@@ -296,21 +356,37 @@ _fm_delivery_arm_pr() {
     _fm_delivery_reason "PR $target's file list is empty - nothing is being delivered by that PR"
     return 1
   fi
-  default=$(_fm_delivery_default_branch "$wt") || {
-    _fm_delivery_reason "cannot determine the default branch to compute the work's changed paths"
-    return 1
-  }
-  if git -C "$wt" rev-parse --quiet --verify "refs/remotes/origin/$default" >/dev/null 2>&1; then
-    base="refs/remotes/origin/$default"
-  else
-    base="refs/heads/$default"
+  # The paths to demand of the PR's file list are the ones the PR itself is
+  # responsible for, so they are computed against the PR's OWN base branch read
+  # from the forge - not the repo default. A stacked PR based on another branch,
+  # or a branch whose earlier commits went out through a different PR, otherwise
+  # gets refused for paths that PR was never supposed to carry.
+  base_branch=$(cd "$wt" && gh pr view "$target" --json baseRefName -q '.baseRefName' 2>/dev/null) || base_branch=
+  base_branch=$(printf '%s\n' "$base_branch" | head -1)
+  case "$base_branch" in
+    ''|-*|*[[:space:]]*|*..*) base_branch= ;;
+  esac
+  if [ -z "$base_branch" ]; then
+    # Fall back to the repo default only when the forge would not say; still
+    # fail closed when even that cannot be determined or resolved.
+    base_branch=$(_fm_delivery_default_branch "$wt") || {
+      _fm_delivery_reason "cannot read PR $target's base branch from the forge and cannot determine the repo default branch to compute the work's changed paths"
+      return 1
+    }
+  fi
+  if ! base=$(_fm_delivery_base_ref "$wt" "$base_branch"); then
+    git -C "$wt" fetch --quiet origin "+refs/heads/$base_branch:refs/remotes/origin/$base_branch" >/dev/null 2>&1 || true
+    base=$(_fm_delivery_base_ref "$wt" "$base_branch") || {
+      _fm_delivery_reason "cannot resolve PR $target's base branch '$base_branch' locally or from origin to compute the work's changed paths"
+      return 1
+    }
   fi
   local_paths=$(_fm_delivery_local_paths "$wt" "$base") || {
-    _fm_delivery_reason "cannot compute the worktree's changed paths against $default"
+    _fm_delivery_reason "cannot compute the worktree's changed paths against $base_branch"
     return 1
   }
   if [ -z "$local_paths" ] && [ -z "$deliverables" ]; then
-    _fm_delivery_reason "the worktree's net diff against $default is empty and no expected deliverable paths are recorded - nothing verifiable is being delivered"
+    _fm_delivery_reason "the worktree's net diff against $base_branch is empty and no expected deliverable paths are recorded - nothing verifiable is being delivered"
     return 1
   fi
   missing=
@@ -416,7 +492,7 @@ fm_delivery_override_active() {
 # header. Returns 0 for pass, override, or not-applicable; 1 for refused.
 fm_delivery_verify() {
   local id=$1 state=$2 data=$3
-  local meta kind mode wt branch deliverables
+  local meta kind mode wt branch deliverables net
   _fm_delivery_reset
   meta="$state/$id.meta"
   if [ ! -f "$meta" ]; then
@@ -450,6 +526,15 @@ fm_delivery_verify() {
     FM_DELIVERY_RESULT=refused
     _fm_delivery_reason "task worktree '${wt:-<unrecorded>}' is not inspectable - cannot verify delivery (fail closed)"
     return 1
+  fi
+  # Nothing produced is not delivery: a contentless worktree has nothing for
+  # either arm to verify, so it is not-applicable (teardown may clear the
+  # debris) and NO durable evidence is written (a dependent step stays blocked).
+  if [ -z "$deliverables" ] && net=$(_fm_delivery_net_work "$wt") && [ -z "$net" ]; then
+    FM_DELIVERY_RESULT=not-applicable
+    _fm_delivery_evidence "the worktree's net diff against the default branch is empty and no expected deliverable paths are recorded - nothing was produced to deliver, so no delivery evidence is recorded"
+    _fm_delivery_evidence "if this task's work did land (fast-forward or rebase leaves the same empty diff), make it verifiable: $(_fm_delivery_resolutions "$id")"
+    return 0
   fi
   branch=$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
   if _fm_delivery_arm_remote_default "$wt" "$deliverables"; then
@@ -494,22 +579,33 @@ _fm_delivery_local_only_containment() {
 }
 
 # _fm_delivery_local_only_verify <id> <wt> <deliverables>: local-only mode has
-# no remote PR. With recorded expected deliverable paths, the gate verifies
-# them against the local default branch tree. Without any recorded, the gate
-# attempts to prove the work's own containment in the local default branch
-# (_fm_delivery_local_only_containment); a pass is recorded only when that
-# proof actually holds, never from teardown merely being reached. Everything
-# else in that mode is owned by bin/fm-merge-local.sh and teardown's existing
-# local-only refusal.
+# no remote PR, so the gate's whole proof is _fm_delivery_local_only_containment
+# against the LOCAL default branch; a pass is recorded only when that proof
+# actually holds, never from teardown merely being reached. Recorded expected
+# deliverable paths are an ADDITIONAL demand on top of it, never a substitute:
+# a path can exist in the local default branch for reasons that have nothing to
+# do with this task (it was already tracked, or another task put it there), so
+# checking only path existence would let recorded expectations make the gate
+# weaker than recording none. A contentless worktree is not-applicable with no
+# evidence. Everything else in that mode is owned by bin/fm-merge-local.sh and
+# teardown's existing local-only refusal.
 _fm_delivery_local_only_verify() {
-  local id=$1 wt=$2 deliverables=$3 default p missing
+  local id=$1 wt=$2 deliverables=$3 default p missing net
+  if [ -n "$wt" ] && [ -d "$wt" ] && [ -z "$deliverables" ] \
+     && net=$(_fm_delivery_net_work "$wt") && [ -z "$net" ]; then
+    FM_DELIVERY_RESULT=not-applicable
+    _fm_delivery_evidence "local-only task whose net diff against the default branch is empty, with no expected deliverable paths recorded - nothing was produced to deliver, so no delivery evidence is recorded"
+    _fm_delivery_evidence "if this task's work did land (a fast-forward merge leaves the same empty diff), make it verifiable: $(_fm_delivery_resolutions "$id")"
+    return 0
+  fi
   if [ -z "$deliverables" ]; then
     if [ -n "$wt" ] && [ -d "$wt" ] && _fm_delivery_local_only_containment "$wt"; then
       FM_DELIVERY_RESULT=pass
       return 0
     fi
     FM_DELIVERY_RESULT=not-applicable
-    _fm_delivery_evidence "local-only task with no recorded expected deliverable paths and work not provably contained in the local default branch - local merge rigor is owned by the local-only delivery path"
+    _fm_delivery_evidence "local-only task with no recorded expected deliverable paths and work not provably contained in the local default branch - no delivery evidence is recorded, so a dependent step stays blocked"
+    _fm_delivery_evidence "to clear it: $(_fm_delivery_resolutions "$id")"
     return 0
   fi
   if [ -z "$wt" ] || [ ! -d "$wt" ]; then
@@ -532,6 +628,12 @@ EOF
   if [ -n "$missing" ]; then
     FM_DELIVERY_RESULT=refused
     _fm_delivery_reason "local $default is missing expected deliverable path(s):$missing - merge the approved branch first (bin/fm-merge-local.sh)"
+    return 1
+  fi
+  if ! _fm_delivery_local_only_containment "$wt"; then
+    FM_DELIVERY_RESULT=refused
+    _fm_delivery_reason "every expected deliverable path exists in local $default, but this task's own work is NOT contained in that branch - a path existing there proves nothing about this task, so no delivery evidence is recorded"
+    _fm_delivery_reason "to clear it: $(_fm_delivery_resolutions "$id")"
     return 1
   fi
   FM_DELIVERY_RESULT=pass
@@ -560,16 +662,30 @@ fm_delivery_record() {
   return 0
 }
 
+# fm_delivery_record_scout_report <id> <data-dir> <report-path>: the scout half
+# of the dependent-step contract. A scout has no PR and no landed diff; its
+# delivery is the report PLUS the unresolved-decision completion gate. Callable
+# only from bin/fm-teardown.sh's kind=scout block, strictly AFTER both of those
+# checks have passed, so the record it writes can only restate verified facts -
+# it never performs the checks itself and never accepts a worker's claim that
+# they passed.
+fm_delivery_record_scout_report() {
+  local id=$1 data=$2 report=$3
+  _fm_delivery_reset
+  FM_DELIVERY_RESULT=pass
+  _fm_delivery_evidence "scout $id delivered its report at $report (verified present by teardown)"
+  _fm_delivery_evidence "the unresolved-decision completion gate verified its captain-held inventory (bin/fm-decision-hold.sh verify $id)"
+  fm_delivery_record "$id" "$data"
+}
+
 # fm_delivery_required_evidence <data-dir> <required-id>: does durable evidence
-# exist that <required-id> cleared the gate (delivered.md) or, for a finished
-# scout, produced its report (report.md)? Read-only; used by fm-spawn --requires.
+# exist that <required-id> cleared the gate? That is data/<id>/delivered.md and
+# nothing else. A bare data/<id>/report.md does NOT satisfy a dependency: the
+# file only proves a worker wrote a file, whereas delivered.md is written by
+# firstmate's own gates (this library, from teardown or the gate CLI) - for a
+# scout, only after its report check and decision gate both passed. Read-only;
+# used by fm-spawn --requires.
 fm_delivery_required_evidence() {
   local data=$1 rid=$2
-  if [ -f "$data/$rid/delivered.md" ] && [ ! -L "$data/$rid/delivered.md" ]; then
-    return 0
-  fi
-  if [ -f "$data/$rid/report.md" ] && [ ! -L "$data/$rid/report.md" ]; then
-    return 0
-  fi
-  return 1
+  [ -f "$data/$rid/delivered.md" ] && [ ! -L "$data/$rid/delivered.md" ]
 }

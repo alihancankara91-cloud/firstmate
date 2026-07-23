@@ -81,7 +81,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   secondmates.md      secondmate routing table; firstmate-private, maintained by fm-home-seed.sh (section 6)
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when kind=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
-  <id>/delivered.md  durable delivery-gate evidence written only by a gate pass (bin/fm-delivery-lib.sh); read by fm-spawn --requires; survives teardown
+  <id>/delivered.md  durable delivery-gate evidence written only by a gate pass (bin/fm-delivery-lib.sh), or by scout teardown once the report check and the unresolved-decision gate both pass; firstmate-owned, never written by a crewmate; the ONLY thing fm-spawn --requires accepts (a bare report.md is not evidence); survives teardown
 projects/            cloned repos; gitignored; READ-ONLY for you
 state/               volatile runtime signals; gitignored
   <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth

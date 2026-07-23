@@ -7,12 +7,16 @@
 #   positional harness arg still works for back-compat.
 #   --requires <task-id> (repeatable) declares this spawn a dependent step of a
 #   predecessor task. The spawn refuses unless each named predecessor holds
-#   durable delivery evidence - data/<id>/delivered.md written only by a
-#   delivery-gate pass, or a finished scout's data/<id>/report.md
-#   (bin/fm-delivery-lib.sh owns that contract; fail closed on no evidence).
-#   A local-only predecessor with no recorded deliverable paths only gets
-#   delivered.md when its teardown can itself prove the work is contained in
-#   the local default branch; reaching teardown alone is never sufficient.
+#   durable delivery evidence - data/<id>/delivered.md, written only by a
+#   delivery-gate pass (bin/fm-delivery-lib.sh owns that contract; fail closed
+#   on no evidence). A bare data/<id>/report.md does not satisfy a dependency;
+#   a scout earns delivered.md at teardown, after its report check and the
+#   unresolved-decision completion gate have both passed.
+#   A local-only predecessor only gets delivered.md when its teardown can itself
+#   prove the work is contained in the local default branch; reaching teardown
+#   alone is never sufficient, and neither is a recorded deliverable path merely
+#   existing in that branch. A predecessor that produced no net change at all
+#   records no evidence, so a dependent step on it stays refused.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
@@ -118,7 +122,14 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,83p' "$0" | sed 's/^# \{0,1\}//'
+  # The whole leading comment block, derived rather than a hand-kept line range:
+  # a static range silently truncated --help mid-sentence every time the header
+  # grew.
+  awk '
+    NR == 1 { next }
+    /^#/ { sub(/^# ?/, ""); print; next }
+    { exit }
+  ' "$0"
 }
 
 case "${1:-}" in
@@ -394,14 +405,16 @@ ID=${POS[0]}
 fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
 # Dependent-step half of the delivery gate (bin/fm-delivery-lib.sh owns the
 # contract): a spawn declared dependent on predecessor tasks refuses unless each
-# predecessor has durable delivery evidence - data/<id>/delivered.md written
-# only by a delivery-gate pass (verify or teardown), or a finished scout's
-# data/<id>/report.md. Fail closed: no evidence means not delivered, whatever
-# any status line or report asserts. Runs before any backend or state mutation.
+# predecessor has durable delivery evidence - data/<id>/delivered.md, written
+# only by a delivery-gate pass (verify or teardown) or, for a scout, by the
+# teardown that saw both scout gates pass. A bare data/<id>/report.md is not
+# evidence. Fail closed: no evidence means not delivered, whatever any status
+# line or report asserts. Runs before any backend or state mutation.
 for rid in "${REQUIRES[@]+"${REQUIRES[@]}"}"; do
   if ! fm_delivery_required_evidence "$DATA" "$rid"; then
-    echo "error: refusing to spawn $ID: required predecessor '$rid' has not cleared the delivery gate (no data/$rid/delivered.md and no data/$rid/report.md)" >&2
+    echo "error: refusing to spawn $ID: required predecessor '$rid' has not cleared the delivery gate (no data/$rid/delivered.md)" >&2
     echo "Verify the predecessor's delivery first: bin/fm-delivery-gate.sh verify $rid" >&2
+    echo "If it is delivered but unverifiable, resolve it: land the work in the local default branch and tear down (bin/fm-merge-local.sh), record the expected deliverable paths (bin/fm-delivery-gate.sh expect $rid <path>...), or record the loud exception (bin/fm-delivery-gate.sh override $rid --reason '<why>')" >&2
     exit 1
   fi
 done

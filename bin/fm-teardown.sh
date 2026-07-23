@@ -30,10 +30,16 @@
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge after configured approval) as a fallback
 # for the common case where there is no remote at all.
+# A not-applicable gate result (nothing was produced, or an unprovable
+# local-only containment) lets teardown proceed but records NO delivered.md, and
+# the evidence saying so is printed rather than swallowed.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
+# Once BOTH of those pass, teardown writes the scout's own data/<id>/delivered.md
+# through bin/fm-delivery-lib.sh, because that record - not the report file - is
+# what fm-spawn --requires reads for a dependent step.
 # Before destructive cleanup, teardown validates task check artifacts and any
 # matching quarantine entries as ordinary single-link files on the state
 # device. It refuses and preserves task state when that proof fails; otherwise
@@ -1071,6 +1077,14 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
     echo "Inventory its report and any visual review through bin/fm-decision-hold.sh before teardown." >&2
     exit 1
   fi
+  # Both scout gates have now passed, so - and only now - the scout gets the
+  # same durable delivery evidence a ship task earns from the delivery gate.
+  # fm-spawn --requires reads delivered.md and nothing else; the report file by
+  # itself never satisfied firstmate's gates, only the worker's writing hand.
+  fm_delivery_record_scout_report "$ID" "$DATA" "$REPORT" || {
+    echo "error: could not write durable delivery record data/$ID/delivered.md" >&2
+    exit 1
+  }
 fi
 
 if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ]; then
@@ -1108,7 +1122,12 @@ fi
 # durable data/<id>/delivered.md evidence that fm-spawn --requires reads.
 if [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
   if fm_delivery_verify "$ID" "$STATE" "$DATA"; then
-    [ "$FM_DELIVERY_RESULT" != override ] || printf '%s\n' "$FM_DELIVERY_EVIDENCE"
+    case "$FM_DELIVERY_RESULT" in
+      # An override is loud by contract; a not-applicable result means teardown
+      # proceeds while NO delivery evidence is recorded, which must never be
+      # silent either - the operator has to see that dependents stay blocked.
+      override|not-applicable) printf '%s\n' "$FM_DELIVERY_EVIDENCE" ;;
+    esac
     if [ "$FM_DELIVERY_RESULT" != not-applicable ]; then
       fm_delivery_record "$ID" "$DATA" || {
         echo "error: could not write durable delivery record data/$ID/delivered.md" >&2
