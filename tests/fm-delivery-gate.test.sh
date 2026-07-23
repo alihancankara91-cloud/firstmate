@@ -307,12 +307,14 @@ test_verify_passes_verified_pr_and_records_evidence() {
 
 # --- a stacked PR is judged against its OWN base, not the repo default ------
 
-# Push <branch> to origin with <file>=<content> committed on top of the origin
-# baseline, then make its objects available in the project without leaving a
-# remote-tracking ref behind - the gate has to fetch the base itself.
-# Args: case_dir branch file content
-add_origin_branch_without_tracking_ref() {
-  local case_dir=$1 branch=$2 file=$3 content=$4 tmp
+# Serve <branch> from origin with <file>=<content> committed on top of the
+# origin baseline, make its objects available in the project, and then rewind
+# the project's remote-tracking ref for it to the baseline. Origin really holds
+# the branch, but every local view of it is STALE, so only a fresh fetch can
+# find the true branch point. Args: case_dir branch file content
+add_origin_branch_with_stale_tracking_ref() {
+  local case_dir=$1 branch=$2 file=$3 content=$4 tmp baseline
+  baseline=$(git -C "$case_dir/project" rev-parse refs/remotes/origin/main)
   tmp="$case_dir/_base"
   git clone -q "$case_dir/origin.git" "$tmp"
   printf '%s\n' "$content" > "$tmp/$file"
@@ -322,7 +324,7 @@ add_origin_branch_without_tracking_ref() {
   rm -rf "$tmp"
   git -C "$case_dir/project" fetch -q origin "$branch"
   git -C "$case_dir/project" rev-parse FETCH_HEAD > "$case_dir/base-head"
-  git -C "$case_dir/project" update-ref -d "refs/remotes/origin/$branch" 2>/dev/null || true
+  git -C "$case_dir/project" update-ref "refs/remotes/origin/$branch" "$baseline"
 }
 
 test_verify_passes_stacked_pr_against_its_own_base() {
@@ -331,7 +333,10 @@ test_verify_passes_stacked_pr_against_its_own_base() {
   write_meta "$case_dir" no-mistakes ship
   # PR 7's base is feature-base, not main. base.txt is inherited from that base
   # and belongs to the OTHER PR, so PR 7's own file list legitimately omits it.
-  add_origin_branch_without_tracking_ref "$case_dir" feature-base base.txt inherited
+  # The local view of feature-base is stale (rewound to the baseline): judged
+  # against it, base.txt would look like this PR's own work and be demanded of
+  # its file list. Only the freshly fetched base gives the true branch point.
+  add_origin_branch_with_stale_tracking_ref "$case_dir" feature-base base.txt inherited
   git -C "$case_dir/wt" reset --hard -q "$(cat "$case_dir/base-head")"
   wt_commit_file "$case_dir" stacked.txt "the stacked change"
   append_pr_meta_url "$case_dir"
@@ -349,7 +354,35 @@ test_verify_passes_stacked_pr_against_its_own_base() {
   assert_not_contains "$(cat "$case_dir/stderr")" 'base.txt' \
     "stacked-pr: an inherited path must never be demanded of this PR's file list"
   assert_present "$case_dir/data/task-x1/delivered.md" "stacked-pr: durable evidence must be recorded"
-  pass "a stacked PR passes because changed paths come from its own baseRefName"
+  pass "a stacked PR passes against a freshly fetched view of its own baseRefName"
+}
+
+test_verify_fails_closed_when_pr_base_cannot_be_fetched() {
+  local case_dir rc head
+  case_dir=$(make_case stacked-pr-base-unfetchable)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+  push_branch "$case_dir"
+  append_pr_meta_url "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf '%s\n' "feature.txt" > "$case_dir/pr-files.txt"
+  # The forge names a base branch origin does not serve. A same-named local
+  # branch exists and would resolve if the gate were willing to look locally -
+  # it must not be, and the unfetchable base must fail the arm closed.
+  git -C "$case_dir/project" branch -q --no-track gone-base refs/remotes/origin/main
+  add_gh_pr "$case_dir" MERGED "$head" gone-base
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "stacked-pr-base-unfetchable: an unfetchable PR base must refuse"
+  grep -q "cannot fetch origin/gone-base" "$case_dir/stderr" \
+    || fail "stacked-pr-base-unfetchable: refusal must name the base branch it could not fetch"
+  assert_absent "$case_dir/data/task-x1/delivered.md" \
+    "stacked-pr-base-unfetchable: nothing verified means no evidence"
+  pass "a PR base that origin does not serve fails closed instead of using a local branch"
 }
 
 test_verify_fails_closed_when_pr_base_and_repo_default_unreadable() {
@@ -432,6 +465,8 @@ test_verify_refuses_unreachable_remote() {
 
   expect_code 1 "$rc" "unreachable-remote: verify must refuse when it cannot check (fail closed)"
   grep -q 'REFUSED' "$case_dir/stderr" || fail "unreachable-remote: no REFUSED line"
+  grep -q 'cannot fetch origin/main' "$case_dir/stderr" \
+    || fail "unreachable-remote: the fetch failure itself must be reported, not swallowed"
   assert_absent "$case_dir/data/task-x1/delivered.md" "unreachable-remote: no evidence may appear when nothing was verified"
   pass "verify refuses when the remote is unreachable (fail closed, no false confidence)"
 }
@@ -875,6 +910,7 @@ test_verify_refuses_pr_whose_file_list_lacks_the_work
 test_verify_refuses_missing_expected_deliverable
 test_verify_passes_verified_pr_and_records_evidence
 test_verify_passes_stacked_pr_against_its_own_base
+test_verify_fails_closed_when_pr_base_cannot_be_fetched
 test_verify_fails_closed_when_pr_base_and_repo_default_unreadable
 test_verify_judges_emptiness_against_the_freshly_fetched_default_ref
 test_verify_refuses_unreachable_remote

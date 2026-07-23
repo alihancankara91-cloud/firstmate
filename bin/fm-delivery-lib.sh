@@ -23,14 +23,16 @@
 #     fetched default tree. This arm covers the captain-authorized pr-less
 #     merge flow on repos with no PR CI.
 #
-#     ONE VIEW OF THE REMOTE: the remote default branch is fetched exactly once
-#     per verification, up front, and every question asked of it - both "did
-#     this worktree produce anything?" and the containment proof itself - is
-#     answered against that one freshly fetched ref. Judging the two against
-#     different views (an unfetched remote-tracking ref for one, a fetched one
-#     for the other) would make the SAME delivery pass or come back empty
-#     depending only on how stale the local ref happened to be. A fetch failure
-#     fails this arm closed, exactly like any other error.
+#     ONE VIEW OF THE REMOTE: every remote branch the gate computes against is
+#     fetched exactly once per verification, up front, and every question asked
+#     of it is answered against that one freshly fetched ref - for the default
+#     branch, both "did this worktree produce anything?" and the containment
+#     proof itself; for Arm P below, the PR's own base. There is no path that
+#     resolves whatever remote-tracking ref (or same-named local branch) happens
+#     to be lying around: judging against different views would make the SAME
+#     delivery pass or refuse depending only on how stale a local ref happened
+#     to be. A fetch failure fails that arm closed, exactly like any other
+#     error.
 #
 #   Arm P (raised pull request): a PR is resolvable for the task (recorded
 #     pr= metadata, or discovered from the branch name), the PR is open or
@@ -40,7 +42,10 @@
 #     the forge via `gh pr diff --name-only`, never from the local branch, a
 #     commit message, or a pipeline result - is non-empty, contains every
 #     path the worktree's net diff produced, and contains every recorded
-#     expected deliverable path.
+#     expected deliverable path. That net diff is taken against the PR's OWN
+#     base branch (baseRefName, read from the forge), freshly fetched per the
+#     rule above, so a stacked PR is never refused for paths it inherited from
+#     the branch it is based on and never judged against a stale view of it.
 #
 #   FAIL CLOSED: any error - unreachable remote, gh failure, missing worktree
 #   input, ambiguous state - fails that arm; both arms failing refuses. The
@@ -141,6 +146,7 @@ _fm_delivery_reset() {
   FM_DELIVERY_RESULT=
   FM_DELIVERY_EVIDENCE=
   FM_DELIVERY_REASONS=
+  FM_DELIVERY_FETCHED_REF=
 }
 
 _fm_delivery_reason() {
@@ -206,21 +212,6 @@ _fm_delivery_default_branch() {
   return 1
 }
 
-# _fm_delivery_base_ref <wt> <branch>: print a resolvable git ref for <branch>,
-# preferring the remote-tracking ref (what the forge actually holds) over the
-# local one. Non-zero when neither exists, so callers fail closed instead of
-# diffing against nothing.
-_fm_delivery_base_ref() {
-  local wt=$1 branch=$2
-  [ -n "$branch" ] || return 1
-  if git -C "$wt" rev-parse --quiet --verify "refs/remotes/origin/$branch" >/dev/null 2>&1; then
-    printf '%s\n' "refs/remotes/origin/$branch"
-    return 0
-  fi
-  git -C "$wt" show-ref --verify --quiet "refs/heads/$branch" || return 1
-  printf '%s\n' "refs/heads/$branch"
-}
-
 # _fm_delivery_local_paths <wt> <default-ref>: the net repo-relative paths the
 # worktree's work changed, relative to the merge-base with <default-ref>.
 # Non-zero when the diff cannot be computed (fail closed at the caller).
@@ -231,27 +222,48 @@ _fm_delivery_local_paths() {
   git -C "$wt" diff --name-only "$base" HEAD -- 2>/dev/null
 }
 
-# _fm_delivery_fetch_default_ref <wt>: fetch the remote default branch ONCE and
-# print the remote-tracking ref that every later question about the remote must
-# be answered against - the emptiness test and Arm R's containment proof alike.
-# Appends the refusal reason and returns non-zero when the default branch cannot
-# be determined, there is no origin, or the fetch fails; that is Arm R failing
-# closed, and the caller must not fall back to an unfetched view of the ref.
+# _fm_delivery_fetch_remote_branch <wt> <branch> <what>: fetch <branch> from
+# origin ONCE and publish, in FM_DELIVERY_FETCHED_REF, the remote-tracking ref
+# that every later question about it must be answered against. This is the
+# single door to any remote ref the gate computes against - there is
+# deliberately no "resolve whatever is already local" path, because an unfetched
+# remote-tracking ref or an unrelated local branch of the same name would
+# silently decide the verdict. Appends the refusal reason and returns non-zero
+# when there is no origin or the fetch fails; the caller fails its arm closed
+# rather than falling back to a stale view.
+#
+# The result travels in a variable rather than on stdout on purpose: a helper
+# that records refusal reasons must never be called inside a command
+# substitution, where every reason it appends would be discarded with the
+# subshell and the gate would refuse without saying why.
+_fm_delivery_fetch_remote_branch() {
+  local wt=$1 branch=$2 what=$3
+  FM_DELIVERY_FETCHED_REF=
+  [ -n "$branch" ] || return 1
+  git -C "$wt" remote get-url origin >/dev/null 2>&1 || {
+    _fm_delivery_reason "no origin remote to verify $what '$branch' against"
+    return 1
+  }
+  git -C "$wt" fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" >/dev/null 2>&1 || {
+    _fm_delivery_reason "cannot fetch origin/$branch ($what; unreachable remote counts as not delivered)"
+    return 1
+  }
+  FM_DELIVERY_FETCHED_REF="refs/remotes/origin/$branch"
+}
+
+# _fm_delivery_fetch_default_ref <wt>: publish, in FM_DELIVERY_FETCHED_REF, the
+# freshly fetched remote default branch ref - the one view the emptiness test
+# and Arm R's containment proof both use. Non-zero (with a reason) when the
+# default branch cannot be determined or the fetch fails; that is Arm R failing
+# closed.
 _fm_delivery_fetch_default_ref() {
   local wt=$1 default
+  FM_DELIVERY_FETCHED_REF=
   default=$(_fm_delivery_default_branch "$wt") || {
     _fm_delivery_reason "cannot determine the remote default branch"
     return 1
   }
-  git -C "$wt" remote get-url origin >/dev/null 2>&1 || {
-    _fm_delivery_reason "no origin remote to verify the default branch against"
-    return 1
-  }
-  git -C "$wt" fetch --quiet origin "+refs/heads/$default:refs/remotes/origin/$default" >/dev/null 2>&1 || {
-    _fm_delivery_reason "cannot fetch origin/$default (unreachable remote counts as not delivered)"
-    return 1
-  }
-  printf '%s\n' "refs/remotes/origin/$default"
+  _fm_delivery_fetch_remote_branch "$wt" "$default" "the default branch"
 }
 
 # _fm_delivery_local_default_ref <wt>: the local default branch ref that
@@ -359,11 +371,14 @@ _fm_delivery_head_contained() {
   _fm_delivery_unpushed_patches_in_pr_head "$wt" "$pr_head"
 }
 
-# _fm_delivery_arm_pr <meta> <wt> <branch> <deliverables>: Arm P. Verifies the
-# raised PR and its forge-side file list. Appends refusal reasons and returns
-# non-zero on any failure. On success appends evidence including the file list.
+# _fm_delivery_arm_pr <meta> <wt> <branch> <deliverables> <default-ref>: Arm P.
+# Verifies the raised PR and its forge-side file list. <default-ref> is the
+# already-fetched remote default ref (empty when that fetch failed), reused when
+# the PR's base is the default branch so the remote is fetched once per branch.
+# Appends refusal reasons and returns non-zero on any failure. On success
+# appends evidence including the file list.
 _fm_delivery_arm_pr() {
-  local meta=$1 wt=$2 branch=$3 deliverables=$4
+  local meta=$1 wt=$2 branch=$3 deliverables=$4 default_ref=$5
   local target view state pr_head files local_paths p base base_branch missing
   target=$(_fm_delivery_pr_target "$meta" "$wt" "$branch") || {
     _fm_delivery_reason "no pull request found for the work (no pr= recorded and no PR matches branch '$branch' on the forge)"
@@ -415,12 +430,15 @@ _fm_delivery_arm_pr() {
       return 1
     }
   fi
-  if ! base=$(_fm_delivery_base_ref "$wt" "$base_branch"); then
-    git -C "$wt" fetch --quiet origin "+refs/heads/$base_branch:refs/remotes/origin/$base_branch" >/dev/null 2>&1 || true
-    base=$(_fm_delivery_base_ref "$wt" "$base_branch") || {
-      _fm_delivery_reason "cannot resolve PR $target's base branch '$base_branch' locally or from origin to compute the work's changed paths"
-      return 1
-    }
+  # One view of the remote, for the PR base too: the changed-path set is
+  # computed only against a freshly fetched view of the PR's base. When that is
+  # the default branch the caller already fetched it, so reuse that exact ref
+  # instead of fetching twice.
+  if [ -n "$default_ref" ] && [ "refs/remotes/origin/$base_branch" = "$default_ref" ]; then
+    base=$default_ref
+  else
+    _fm_delivery_fetch_remote_branch "$wt" "$base_branch" "PR $target's base branch" || return 1
+    base=$FM_DELIVERY_FETCHED_REF
   fi
   local_paths=$(_fm_delivery_local_paths "$wt" "$base") || {
     _fm_delivery_reason "cannot compute the worktree's changed paths against $base_branch"
@@ -562,7 +580,9 @@ fm_delivery_verify() {
   # One fetch, one view: the emptiness question and Arm R's containment proof
   # are both answered against this ref. A fetch failure records its reason and
   # fails Arm R closed - it never downgrades to an unfetched view of the ref.
-  if default_ref=$(_fm_delivery_fetch_default_ref "$wt"); then
+  default_ref=
+  if _fm_delivery_fetch_default_ref "$wt"; then
+    default_ref=$FM_DELIVERY_FETCHED_REF
     # Nothing produced is not delivery: a contentless worktree has nothing for
     # either arm to verify, so it is not-applicable (teardown may clear the
     # debris) and NO durable evidence is written (a dependent step stays blocked).
@@ -578,7 +598,7 @@ fm_delivery_verify() {
     fi
   fi
   branch=$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-  if _fm_delivery_arm_pr "$meta" "$wt" "$branch" "$deliverables"; then
+  if _fm_delivery_arm_pr "$meta" "$wt" "$branch" "$deliverables" "$default_ref"; then
     FM_DELIVERY_RESULT=pass
     return 0
   fi
