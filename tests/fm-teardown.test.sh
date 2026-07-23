@@ -83,7 +83,12 @@ exit 0
 SH
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
-# tmux kill-window etc.: succeed silently.
+# tmux kill-window etc.: succeed silently. list-panes (the strict existence
+# probe): report the window gone (exit 1), so teardown's verified endpoint
+# removal sees a clean kill.
+case "${1:-}" in
+  list-panes) exit 1 ;;
+esac
 exit 0
 SH
   # Default gh-axi mock: no PR is associated with the branch, and viewing any PR
@@ -542,6 +547,68 @@ test_local_only_fork_remote_allows() {
   expect_code 0 "$rc" "fork-allow: teardown should succeed when HEAD is on a fork remote"
   ! grep -q REFUSED "$case_dir/stderr" || fail "fork-allow: teardown printed a REFUSED line"
   pass "local-only worktree with HEAD on a fork remote is torn down (fix holds)"
+}
+
+# Panel-residue hygiene (2026-07-23): teardown must actually remove the
+# recorded endpoint, not fire a best-effort kill and hope. A stateful fake
+# tmux keeps the window "alive" for display-message until kill-window has
+# been called, so a passing run proves the kill fired AND the verification
+# observed the window gone.
+test_endpoint_kill_is_verified_gone() {
+  local case_dir rc
+  case_dir=$(make_case endpoint-verified)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+  cat > "$case_dir/fakebin/tmux" <<SH
+#!/usr/bin/env bash
+case "\${1:-}" in
+  kill-window) touch "$case_dir/window-killed"; exit 0 ;;
+  list-panes) [ -e "$case_dir/window-killed" ] && exit 1; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "endpoint-verified: teardown should succeed"
+  [ -e "$case_dir/window-killed" ] || fail "endpoint-verified: teardown never killed the recorded window"
+  ! grep -q "survived teardown removal" "$case_dir/stderr" \
+    || fail "endpoint-verified: verified-gone endpoint still produced a residue warning"
+  pass "teardown kills the recorded endpoint and verifies it is actually gone"
+}
+
+# A kill that silently fails must no longer be invisible: the fake tmux
+# accepts kill-window but keeps reporting the window alive, and teardown must
+# say so loudly while still completing state cleanup.
+test_surviving_endpoint_warns_loudly() {
+  local case_dir rc
+  case_dir=$(make_case endpoint-survives)
+  write_meta "$case_dir" local-only ship
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+  cat > "$case_dir/fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+# kill-window "succeeds" but the window never goes away.
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/tmux"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "endpoint-survives: teardown should still complete state cleanup"
+  grep -q "survived teardown removal" "$case_dir/stderr" \
+    || fail "endpoint-survives: leftover endpoint was not reported"
+  [ ! -e "$case_dir/state/task-x1.meta" ] \
+    || fail "endpoint-survives: task state was not cleaned up"
+  pass "teardown reports a surviving endpoint loudly instead of leaving silent pane residue"
 }
 
 test_teardown_prompts_tasks_axi_done_when_compatible() {
@@ -1413,6 +1480,8 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
 }
 
 test_local_only_fork_remote_allows
+test_endpoint_kill_is_verified_gone
+test_surviving_endpoint_warns_loudly
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
 test_local_only_truly_unpushed_refuses
