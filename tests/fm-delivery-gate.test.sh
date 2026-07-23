@@ -102,6 +102,18 @@ append_pr_meta_url() {
   printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$1/state/task-x1.meta"
 }
 
+# Add a fork remote and push the worktree's task branch to it, then fetch into
+# the project so the worktree sees the fork's remote-tracking ref. Simulates
+# the legitimate local-only flow where work reaches a remote but never lands
+# on the local default branch. Args: case_dir
+add_fork_with_pushed_branch() {
+  local case_dir=$1
+  git init -q --bare "$case_dir/fork.git"
+  git -C "$case_dir/project" remote add fork "$case_dir/fork.git"
+  git -C "$case_dir/wt" push -q fork fm/task-x1
+  git -C "$case_dir/project" fetch -q fork
+}
+
 # Serve PR 7 from the fake forge: view reports <state> and <head-sha>, and
 # `pr diff --name-only` prints the case's pr-files.txt - the PR's OWN file
 # list, decoupled from anything local so the tests can disagree with reality.
@@ -450,6 +462,72 @@ test_spawn_requires_accepts_scout_report() {
   pass "a dependent spawn accepts a finished scout's report as delivery evidence"
 }
 
+# --- local-only mode with no recorded deliverables: containment is proved,
+# never assumed from teardown being reached -----------------------------------
+
+test_local_only_teardown_records_delivery_when_head_contained_in_local_main() {
+  local case_dir rc wt_head
+  case_dir=$(make_case local-only-main-contained)
+  write_meta "$case_dir" local-only ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+  wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  # Simulate the branch having been merged into local main (bin/fm-merge-local.sh's
+  # job): fast-forward main to HEAD. The worktree shares the project's object db
+  # and refs, so refs/heads/main is visible from $case_dir/wt too.
+  git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "local-only-main-contained: teardown should succeed when HEAD is on local main"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "local-only-main-contained: teardown printed a REFUSED line"
+  assert_present "$case_dir/data/task-x1/delivered.md" "local-only-main-contained: teardown must record durable delivery evidence from proven containment"
+  assert_grep 'work contained in local main' "$case_dir/data/task-x1/delivered.md" \
+    "local-only-main-contained: evidence must name the observed local containment"
+
+  mkdir -p "$case_dir/projects"
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/nonexistent-project" --requires task-x1 \
+    > "$case_dir/spawn-stdout" 2> "$case_dir/spawn-stderr"
+  rc=$?
+  set -e
+  assert_not_contains "$(cat "$case_dir/spawn-stderr")" 'has not cleared the delivery gate' \
+    "local-only-main-contained: a subsequent --requires must pass the gate"
+  [ "$rc" -ne 0 ] || fail "local-only-main-contained: setup error - spawn unexpectedly succeeded"
+  pass "local-only teardown with HEAD contained in local main records delivery and unblocks --requires"
+}
+
+test_local_only_teardown_records_no_delivery_when_fork_remote_not_contained_locally() {
+  local case_dir rc
+  case_dir=$(make_case local-only-fork-not-contained)
+  write_meta "$case_dir" local-only ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+  add_fork_with_pushed_branch "$case_dir"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "local-only-fork-not-contained: teardown should still succeed when HEAD is on a fork remote (unchanged behavior)"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "local-only-fork-not-contained: teardown printed a REFUSED line"
+  assert_absent "$case_dir/data/task-x1/delivered.md" \
+    "local-only-fork-not-contained: no delivery evidence may be written without proven local containment"
+
+  mkdir -p "$case_dir/projects"
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/project" --requires task-x1 \
+    > "$case_dir/spawn-stdout" 2> "$case_dir/spawn-stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "local-only-fork-not-contained: a subsequent --requires must still refuse"
+  grep -q 'has not cleared the delivery gate' "$case_dir/spawn-stderr" \
+    || fail "local-only-fork-not-contained: refusal must name the delivery gate"
+  pass "local-only teardown with unmerged fork-remote work records no delivery evidence and --requires keeps refusing"
+}
+
 test_spawn_requires_rejects_invalid_id() {
   local case_dir rc
   case_dir=$(make_case requires-invalid)
@@ -481,5 +559,7 @@ test_spawn_requires_refuses_without_evidence
 test_spawn_requires_accepts_delivered_predecessor
 test_spawn_requires_accepts_scout_report
 test_spawn_requires_rejects_invalid_id
+test_local_only_teardown_records_delivery_when_head_contained_in_local_main
+test_local_only_teardown_records_no_delivery_when_fork_remote_not_contained_locally
 
 echo "all fm-delivery-gate tests passed"

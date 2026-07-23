@@ -10,6 +10,9 @@
 #   durable delivery evidence - data/<id>/delivered.md written only by a
 #   delivery-gate pass, or a finished scout's data/<id>/report.md
 #   (bin/fm-delivery-lib.sh owns that contract; fail closed on no evidence).
+#   A local-only predecessor with no recorded deliverable paths only gets
+#   delivered.md when its teardown can itself prove the work is contained in
+#   the local default branch; reaching teardown alone is never sufficient.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted

@@ -42,9 +42,21 @@
 #
 # Scope: kind=ship only. Scouts deliver a report, secondmates are not work
 # items - both are not-applicable. mode=local-only tasks have no remote PR;
-# for them the gate verifies only recorded expected deliverable paths against
-# the local default branch tree (bin/fm-merge-local.sh and teardown's existing
-# local-only refusal own the rest of that mode's rigor).
+# for them the gate verifies recorded expected deliverable paths against the
+# local default branch tree when any are recorded. When none are recorded,
+# the gate attempts the same containment proof Arm R uses against the remote
+# default branch (ancestry, or merge-tree write-tree equality) but against
+# the LOCAL default branch - if and only if that proof holds does it pass and
+# record delivery, with evidence naming the observed containment. The proof
+# is never assumed from teardown being reached or from a completion claim;
+# if it cannot be established (uninspectable worktree, undeterminable
+# default branch, or content genuinely not contained - e.g. the legitimate
+# fork-remote local-only flow), the result stays not-applicable exactly as
+# before: teardown's own local-only refusal remains the sole owner of
+# whether teardown proceeds, and no delivered.md is written, so a later
+# --requires on that predecessor keeps refusing fail-closed. The loud
+# recorded override remains the only other path to a pass. bin/fm-merge-local.sh
+# and teardown's existing local-only refusal own the rest of that mode's rigor.
 #
 # Expected deliverable paths are recorded by FIRSTMATE (not the worker) as
 # repeated `deliverable=<repo-relative-path>` lines in state/<id>.meta, via
@@ -452,15 +464,52 @@ fm_delivery_verify() {
   return 1
 }
 
+# _fm_delivery_local_only_containment <wt>: does the local default branch
+# already contain the worktree's HEAD, by direct ancestry or (squash-
+# equivalent) merge-tree equality? Mirrors Arm R's remote technique
+# (_fm_delivery_arm_remote_default) against refs/heads/<default> instead of a
+# fetched remote-tracking ref - no fetch is needed, the branch is local.
+# Non-zero on any doubt: undeterminable default branch, missing local branch,
+# unresolved HEAD, or content genuinely not contained (e.g. work pushed to a
+# fork but never merged into the local default branch). On success appends
+# evidence naming the observed containment; never appends a refusal reason -
+# callers of this helper treat failure as not-applicable, never refused.
+_fm_delivery_local_only_containment() {
+  local wt=$1 default ref default_tree merged_tree current
+  default=$(_fm_delivery_default_branch "$wt") || return 1
+  ref="refs/heads/$default"
+  git -C "$wt" show-ref --verify --quiet "$ref" || return 1
+  current=$(git -C "$wt" rev-parse --verify HEAD 2>/dev/null) || return 1
+  if git -C "$wt" merge-base --is-ancestor "$current" "$ref" 2>/dev/null; then
+    _fm_delivery_evidence "work contained in local $default: HEAD $current"
+    return 0
+  fi
+  default_tree=$(git -C "$wt" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || return 1
+  [ -n "$default_tree" ] || return 1
+  merged_tree=$(git -C "$wt" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 1
+  merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
+  [ -n "$merged_tree" ] && [ "$merged_tree" = "$default_tree" ] || return 1
+  _fm_delivery_evidence "work contained in local $default: HEAD $current (squash-equivalent)"
+  return 0
+}
+
 # _fm_delivery_local_only_verify <id> <wt> <deliverables>: local-only mode has
-# no remote PR; the gate verifies only recorded expected deliverable paths
-# against the local default branch tree. Everything else in that mode is owned
-# by bin/fm-merge-local.sh and teardown's existing local-only refusal.
+# no remote PR. With recorded expected deliverable paths, the gate verifies
+# them against the local default branch tree. Without any recorded, the gate
+# attempts to prove the work's own containment in the local default branch
+# (_fm_delivery_local_only_containment); a pass is recorded only when that
+# proof actually holds, never from teardown merely being reached. Everything
+# else in that mode is owned by bin/fm-merge-local.sh and teardown's existing
+# local-only refusal.
 _fm_delivery_local_only_verify() {
   local id=$1 wt=$2 deliverables=$3 default p missing
   if [ -z "$deliverables" ]; then
+    if [ -n "$wt" ] && [ -d "$wt" ] && _fm_delivery_local_only_containment "$wt"; then
+      FM_DELIVERY_RESULT=pass
+      return 0
+    fi
     FM_DELIVERY_RESULT=not-applicable
-    _fm_delivery_evidence "local-only task with no recorded expected deliverable paths - local merge rigor is owned by the local-only delivery path"
+    _fm_delivery_evidence "local-only task with no recorded expected deliverable paths and work not provably contained in the local default branch - local merge rigor is owned by the local-only delivery path"
     return 0
   fi
   if [ -z "$wt" ] || [ ! -d "$wt" ]; then
