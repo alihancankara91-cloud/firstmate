@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--scout]
+# Usage: fm-spawn.sh <task-id> <project-dir> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--requires <task-id>]... [--scout]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
+#   --requires <task-id> (repeatable) declares this spawn a dependent step of a
+#   predecessor task. The spawn refuses unless each named predecessor holds
+#   durable delivery evidence - data/<id>/delivered.md written only by a
+#   delivery-gate pass, or a finished scout's data/<id>/report.md
+#   (bin/fm-delivery-lib.sh owns that contract; fail closed on no evidence).
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
 #   axes chosen by firstmate at intake. They are only threaded into harnesses whose
 #   installed CLIs were verified to support that axis; unsupported axes are omitted
@@ -110,7 +115,7 @@ set -eu
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-  sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,83p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -136,6 +141,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-delivery-lib.sh
+. "$SCRIPT_DIR/fm-delivery-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -151,6 +158,7 @@ HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
 BACKEND_SET=0
+REQUIRES=()
 POS=()
 want_value=
 for a in "$@"; do
@@ -163,6 +171,7 @@ for a in "$@"; do
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
       backend) BACKEND_ARG=$a; BACKEND_SET=1 ;;
+      requires) REQUIRES+=("$a") ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -179,6 +188,8 @@ for a in "$@"; do
     --effort=*) EFFORT=${a#--effort=}; EFFORT_SET=1 ;;
     --backend) want_value=backend ;;
     --backend=*) BACKEND_ARG=${a#--backend=}; BACKEND_SET=1 ;;
+    --requires) want_value=requires ;;
+    --requires=*) REQUIRES+=("${a#--requires=}") ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -191,6 +202,9 @@ case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
 esac
+for rid in "${REQUIRES[@]+"${REQUIRES[@]}"}"; do
+  fm_task_id_path_safe "$rid" || { echo "error: --requires got an invalid task id '$rid'" >&2; exit 1; }
+done
 
 # Backend selection (data/fm-backend-design-d7): explicit --backend, else
 # FM_BACKEND env, else config/backend, else runtime auto-detection, else
@@ -353,6 +367,9 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
   [ -z "$BACKEND_ARG" ] || shared_args+=(--backend "$BACKEND_ARG")
+  for rid in "${REQUIRES[@]+"${REQUIRES[@]}"}"; do
+    shared_args+=(--requires "$rid")
+  done
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -372,6 +389,19 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
 fi
 ID=${POS[0]}
 fm_task_id_creation_valid "$ID" || { echo "error: invalid task id" >&2; exit 2; }
+# Dependent-step half of the delivery gate (bin/fm-delivery-lib.sh owns the
+# contract): a spawn declared dependent on predecessor tasks refuses unless each
+# predecessor has durable delivery evidence - data/<id>/delivered.md written
+# only by a delivery-gate pass (verify or teardown), or a finished scout's
+# data/<id>/report.md. Fail closed: no evidence means not delivered, whatever
+# any status line or report asserts. Runs before any backend or state mutation.
+for rid in "${REQUIRES[@]+"${REQUIRES[@]}"}"; do
+  if ! fm_delivery_required_evidence "$DATA" "$rid"; then
+    echo "error: refusing to spawn $ID: required predecessor '$rid' has not cleared the delivery gate (no data/$rid/delivered.md and no data/$rid/report.md)" >&2
+    echo "Verify the predecessor's delivery first: bin/fm-delivery-gate.sh verify $rid" >&2
+    exit 1
+  fi
+done
 SPAWN_TASK_LOCK="$STATE/.spawn-$ID.lock"
 if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
   echo "error: another spawn is already creating task $ID" >&2

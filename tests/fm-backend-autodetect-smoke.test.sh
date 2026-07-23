@@ -87,6 +87,9 @@ git -C "$PROJ" init -q
 printf '# scratch\n' > "$PROJ/README.md"
 git -C "$PROJ" add README.md
 git -C "$PROJ" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -qm initial
+# Register the scratch project as local-only: it has no remote, so a PR-mode
+# task here could never clear the delivery gate at teardown (correct refusal).
+printf -- '- scratch-project [local-only] - autodetect smoke scratch (added 2026-07-23)\n' > "$DATA/projects.md"
 
 # --- spawn with NO explicit backend config; HERDR_ENV=1 is the only marker --
 

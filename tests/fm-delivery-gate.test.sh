@@ -1,0 +1,485 @@
+#!/usr/bin/env bash
+# tests/fm-delivery-gate.test.sh - the delivery gate BLOCKS, it does not warn.
+#
+# The contract under test is bin/fm-delivery-lib.sh (verification arms,
+# fail-closed rules, scope, override) enforced at bin/fm-teardown.sh (the
+# done-half) and bin/fm-spawn.sh --requires (the dependent-step half), operated
+# by bin/fm-delivery-gate.sh.
+#
+# The four historical failures each get a refusing scenario:
+#   1. commit reported done but never reached the merged PR  -> refused
+#      (PR file list / PR head containment)
+#   2. expected deliverable path never in the PR file list   -> refused
+#   3. branch pushed with no PR raised at all                -> refused
+#   4. branch never pushed to the remote at all              -> refused
+# Plus: the clean case passes without friction, a scout is unaffected, an
+# unreachable remote refuses rather than passes (fail closed), the override is
+# loud and recorded, and a dependent spawn refuses without durable evidence.
+set -eu
+
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+fm_git_identity fmtest fmtest@example.invalid
+
+GATE="$ROOT/bin/fm-delivery-gate.sh"
+TEARDOWN="$ROOT/bin/fm-teardown.sh"
+SPAWN="$ROOT/bin/fm-spawn.sh"
+TMP_ROOT=$(fm_test_tmproot fm-delivery-gate-tests)
+
+# Build a fresh sandbox for one case: state/, data/, config/, fakebin mocks,
+# a bare origin with a main baseline, a project clone, and a task worktree on
+# branch fm/task-x1. Echoes the case dir.
+make_case() {
+  local name=$1 case_dir fakebin
+  case_dir="$TMP_ROOT/$name"
+  fakebin="$case_dir/fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/data" "$case_dir/config" "$fakebin"
+
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  # Default forge mocks: no PR exists anywhere and every view fails - the
+  # "nothing was ever raised" baseline the gate must refuse on.
+  cat > "$fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr list") printf '%s\n' "count: 0 (showing first 0)" "pull_requests[]: []" ; exit 0 ;;
+  "pr view") echo "error: pull request not found" >&2 ; exit 1 ;;
+esac
+exit 0
+SH
+  cat > "$fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+echo "error: pull request not found" >&2
+exit 1
+SH
+  chmod +x "$fakebin/treehouse" "$fakebin/tmux" "$fakebin/gh-axi" "$fakebin/gh"
+
+  git init -q --bare "$case_dir/origin.git"
+  git -C "$case_dir/origin.git" symbolic-ref HEAD refs/heads/main
+  git clone -q "$case_dir/origin.git" "$case_dir/_seed" 2>/dev/null
+  git -C "$case_dir/_seed" -c user.email=t@t -c user.name=t \
+    commit -q --allow-empty -m "origin baseline"
+  git -C "$case_dir/_seed" push -q origin main
+  rm -rf "$case_dir/_seed"
+  git clone -q "$case_dir/origin.git" "$case_dir/project"
+  git -C "$case_dir/project" remote set-head origin main 2>/dev/null || true
+  git -C "$case_dir/project" worktree add -q -b fm/task-x1 "$case_dir/wt" main
+
+  touch "$case_dir/state/.last-watcher-beat"
+  printf '%s\n' "$case_dir"
+}
+
+write_meta() {
+  local case_dir=$1 mode=$2 kind=$3
+  fm_write_meta "$case_dir/state/task-x1.meta" \
+    "window=fm-task-x1" \
+    "worktree=$case_dir/wt" \
+    "project=$case_dir/project" \
+    "kind=$kind" \
+    "mode=$mode"
+}
+
+wt_commit_file() {
+  local case_dir=$1 file=$2 content=$3 msg=${4:-add $2}
+  printf '%s\n' "$content" > "$case_dir/wt/$file"
+  git -C "$case_dir/wt" add -- "$file"
+  git -C "$case_dir/wt" -c user.email=t@t -c user.name=t commit -q -m "$msg"
+}
+
+push_branch() {
+  local case_dir=$1
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+}
+
+append_pr_meta_url() {
+  printf '%s\n' 'pr=https://github.com/example/repo/pull/7' >> "$1/state/task-x1.meta"
+}
+
+# Serve PR 7 from the fake forge: view reports <state> and <head-sha>, and
+# `pr diff --name-only` prints the case's pr-files.txt - the PR's OWN file
+# list, decoupled from anything local so the tests can disagree with reality.
+add_gh_pr() {
+  local case_dir=$1 state=$2 head=$3
+  cat > "$case_dir/fakebin/gh" <<SH
+#!/usr/bin/env bash
+case "\${1:-} \${2:-}" in
+  "pr view")
+    case " \$* " in
+      *"state,headRefOid"*) printf '%s\t%s\n' '$state' '$head' ; exit 0 ;;
+      *"headRefOid"*) printf '%s\n' '$head' ; exit 0 ;;
+    esac
+    ;;
+  "pr diff")
+    case " \$* " in
+      *" --name-only "*) cat '$case_dir/pr-files.txt' ; exit 0 ;;
+    esac
+    ;;
+esac
+echo "error: pull request not found" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/gh"
+}
+
+run_gate() {
+  local case_dir=$1; shift
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$GATE" "$@"
+}
+
+run_teardown() {
+  local case_dir=$1; shift
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 "$@"
+}
+
+run_spawn() {
+  local case_dir=$1; shift
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_PROJECTS_OVERRIDE="$case_dir/projects" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$SPAWN" "$@"
+}
+
+# --- historical failure 4: branch never pushed to the remote ----------------
+
+test_verify_refuses_commit_without_push() {
+  local case_dir rc
+  case_dir=$(make_case commit-no-push)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" notice-send.yml "send capability"
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "commit-no-push: verify must refuse a commit that never left the machine"
+  grep -q 'REFUSED' "$case_dir/stderr" || fail "commit-no-push: no REFUSED line"
+  grep -q 'A commit is not delivery' "$case_dir/stderr" || fail "commit-no-push: missing the core message"
+  assert_absent "$case_dir/data/task-x1/delivered.md" "commit-no-push: refused task must not gain delivery evidence"
+  pass "verify refuses a committed-but-never-pushed task (historical failure 4)"
+}
+
+# --- historical failure 3: pushed branch, no PR raised ----------------------
+
+test_verify_refuses_pushed_branch_without_pr() {
+  local case_dir rc
+  case_dir=$(make_case pushed-no-pr)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" notice-send.yml "send capability"
+  push_branch "$case_dir"
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "pushed-no-pr: verify must refuse a pushed branch with no PR"
+  grep -q 'no pull request found' "$case_dir/stderr" || fail "pushed-no-pr: refusal must name the missing PR"
+  assert_absent "$case_dir/data/task-x1/delivered.md" "pushed-no-pr: refused task must not gain delivery evidence"
+  pass "verify refuses a pushed branch with no PR raised (historical failure 3)"
+}
+
+# --- historical failure 1: work never reached the PR that merged ------------
+
+test_verify_refuses_pr_whose_file_list_lacks_the_work() {
+  local case_dir rc head
+  case_dir=$(make_case pr-missing-file)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" reconstruction.yml "the workflow"
+  push_branch "$case_dir"
+  append_pr_meta_url "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf '%s\n' "unrelated.txt" > "$case_dir/pr-files.txt"
+  add_gh_pr "$case_dir" MERGED "$head"
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "pr-missing-file: verify must refuse when the PR's own file list lacks the work"
+  grep -q 'missing locally changed path' "$case_dir/stderr" || fail "pr-missing-file: refusal must name the missing path check"
+  grep -q 'reconstruction.yml' "$case_dir/stderr" || fail "pr-missing-file: refusal must name the path itself"
+  pass "verify refuses a PR whose file list lacks the produced path (historical failure 1)"
+}
+
+# --- historical failure 2: promised deliverable never in the PR -------------
+
+test_verify_refuses_missing_expected_deliverable() {
+  local case_dir rc head
+  case_dir=$(make_case missing-deliverable)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" helper.txt "support file"
+  push_branch "$case_dir"
+  append_pr_meta_url "$case_dir"
+  run_gate "$case_dir" expect task-x1 .github/workflows/grant-points.yml >/dev/null
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf '%s\n' "helper.txt" > "$case_dir/pr-files.txt"
+  add_gh_pr "$case_dir" OPEN "$head"
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "missing-deliverable: verify must refuse when a promised path is absent from the PR file list"
+  grep -q 'missing expected deliverable' "$case_dir/stderr" || fail "missing-deliverable: refusal must name the expectation check"
+  grep -q 'grant-points.yml' "$case_dir/stderr" || fail "missing-deliverable: refusal must name the promised path"
+  pass "verify refuses when a recorded expected deliverable never reached the PR (historical failure 2)"
+}
+
+# --- the clean case passes without friction ---------------------------------
+
+test_verify_passes_verified_pr_and_records_evidence() {
+  local case_dir rc head
+  case_dir=$(make_case clean-pass)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+  push_branch "$case_dir"
+  append_pr_meta_url "$case_dir"
+  run_gate "$case_dir" expect task-x1 feature.txt >/dev/null
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf '%s\n' "feature.txt" > "$case_dir/pr-files.txt"
+  add_gh_pr "$case_dir" OPEN "$head"
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "clean-pass: verify must pass a raised PR whose file list contains the work"
+  grep -q 'PASS' "$case_dir/stdout" || fail "clean-pass: no PASS line"
+  assert_present "$case_dir/data/task-x1/delivered.md" "clean-pass: durable delivery evidence must be recorded"
+  assert_grep 'feature.txt' "$case_dir/data/task-x1/delivered.md" "clean-pass: evidence must include the verified file list"
+  pass "verify passes the clean case and records durable evidence"
+}
+
+# --- fail closed: unreachable remote refuses, never passes ------------------
+
+test_verify_refuses_unreachable_remote() {
+  local case_dir rc
+  case_dir=$(make_case unreachable-remote)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+  push_branch "$case_dir"
+  append_pr_meta_url "$case_dir"
+  # The remote disappears and the forge errors: the gate must refuse, not pass.
+  git -C "$case_dir/project" remote set-url origin "$case_dir/gone.git"
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unreachable-remote: verify must refuse when it cannot check (fail closed)"
+  grep -q 'REFUSED' "$case_dir/stderr" || fail "unreachable-remote: no REFUSED line"
+  assert_absent "$case_dir/data/task-x1/delivered.md" "unreachable-remote: no evidence may appear when nothing was verified"
+  pass "verify refuses when the remote is unreachable (fail closed, no false confidence)"
+}
+
+# --- scope: a scout has no PR and is not blocked ----------------------------
+
+test_verify_scout_not_applicable() {
+  local case_dir rc
+  case_dir=$(make_case scout-exempt)
+  write_meta "$case_dir" no-mistakes scout
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "scout-exempt: a scout must not be blocked by the delivery gate"
+  grep -q 'NOT APPLICABLE' "$case_dir/stdout" || fail "scout-exempt: missing the not-applicable marker"
+  pass "a scout task is outside the delivery gate"
+}
+
+# --- the override is deliberate, loud, and recorded -------------------------
+
+test_override_is_loud_and_recorded() {
+  local case_dir rc
+  case_dir=$(make_case override)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+
+  run_gate "$case_dir" override task-x1 --reason "captain authorized: repo has no remote yet" > "$case_dir/override-out"
+  grep -q 'DELIVERY GATE OVERRIDE RECORDED' "$case_dir/override-out" || fail "override: recording must announce itself"
+  assert_present "$case_dir/data/task-x1/delivery-override.md" "override: durable override record must exist"
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "override: verify must pass an overridden task"
+  grep -q 'OVERRIDE' "$case_dir/stdout" || fail "override: the pass must be loud about the override"
+  grep -q 'captain authorized' "$case_dir/stdout" || fail "override: the pass must repeat the recorded reason"
+  pass "the override passes loudly with durable records, never silently"
+}
+
+test_override_requires_a_reason() {
+  local case_dir rc
+  case_dir=$(make_case override-no-reason)
+  write_meta "$case_dir" no-mistakes ship
+  set +e
+  run_gate "$case_dir" override task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "override-no-reason: an override without a reason must be rejected"
+  pass "an override without a reason is rejected"
+}
+
+# --- enforcement: teardown blocks, it does not warn -------------------------
+
+test_teardown_refuses_pushed_branch_without_pr() {
+  local case_dir rc
+  case_dir=$(make_case teardown-blocks)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" notice-send.yml "send capability"
+  push_branch "$case_dir"
+  # Today's landed test alone would allow this (HEAD reachable from origin);
+  # the delivery gate must still refuse: pushed is not delivered.
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "teardown-blocks: teardown must refuse an undelivered ship task"
+  grep -q 'has not cleared the delivery gate' "$case_dir/stderr" || fail "teardown-blocks: refusal must name the delivery gate"
+  assert_present "$case_dir/wt" "teardown-blocks: the worktree must be preserved"
+  assert_present "$case_dir/state/task-x1.meta" "teardown-blocks: task state must be preserved"
+  assert_absent "$case_dir/data/task-x1/delivered.md" "teardown-blocks: no delivery evidence may be fabricated"
+  pass "teardown refuses completion for a pushed branch with no PR (the gate blocks)"
+}
+
+test_teardown_passes_verified_pr_and_records_evidence() {
+  local case_dir rc head
+  case_dir=$(make_case teardown-clean)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+  push_branch "$case_dir"
+  append_pr_meta_url "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf '%s\n' "feature.txt" > "$case_dir/pr-files.txt"
+  add_gh_pr "$case_dir" MERGED "$head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "teardown-clean: a delivered task must tear down without friction"
+  assert_present "$case_dir/data/task-x1/delivered.md" "teardown-clean: teardown must record durable delivery evidence"
+  assert_absent "$case_dir/state/task-x1.meta" "teardown-clean: task state must be cleaned up"
+  pass "teardown proceeds for a verified PR and records durable delivery evidence"
+}
+
+# --- enforcement: a dependent step cannot start on an unverified predecessor -
+
+test_spawn_requires_refuses_without_evidence() {
+  local case_dir rc
+  case_dir=$(make_case requires-refuses)
+  mkdir -p "$case_dir/projects"
+
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/project" --requires task-x1 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "requires-refuses: dependent spawn must refuse without delivery evidence"
+  grep -q 'has not cleared the delivery gate' "$case_dir/stderr" || fail "requires-refuses: refusal must name the gate"
+  assert_absent "$case_dir/state/task-y2.meta" "requires-refuses: no task state may be created"
+  pass "a dependent spawn refuses while the predecessor has no delivery evidence"
+}
+
+test_spawn_requires_accepts_delivered_predecessor() {
+  local case_dir rc
+  case_dir=$(make_case requires-accepts)
+  mkdir -p "$case_dir/projects" "$case_dir/data/task-x1"
+  printf '# Delivery record: task-x1\n' > "$case_dir/data/task-x1/delivered.md"
+
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/nonexistent-project" --requires task-x1 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  # The spawn proceeds past the gate and fails later for an unrelated reason
+  # (the project dir does not exist) - what matters is the gate let it through.
+  assert_not_contains "$(cat "$case_dir/stderr")" 'has not cleared the delivery gate' \
+    "requires-accepts: delivered predecessor must pass the gate"
+  [ "$rc" -ne 0 ] || fail "requires-accepts: setup error - spawn unexpectedly succeeded"
+  pass "a dependent spawn passes the gate once durable delivery evidence exists"
+}
+
+test_spawn_requires_accepts_scout_report() {
+  local case_dir rc
+  case_dir=$(make_case requires-scout)
+  mkdir -p "$case_dir/projects" "$case_dir/data/scout-z9"
+  printf '# findings\n' > "$case_dir/data/scout-z9/report.md"
+
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/nonexistent-project" --requires scout-z9 \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  assert_not_contains "$(cat "$case_dir/stderr")" 'has not cleared the delivery gate' \
+    "requires-scout: a finished scout's report satisfies the dependency"
+  [ "$rc" -ne 0 ] || fail "requires-scout: setup error - spawn unexpectedly succeeded"
+  pass "a dependent spawn accepts a finished scout's report as delivery evidence"
+}
+
+test_spawn_requires_rejects_invalid_id() {
+  local case_dir rc
+  case_dir=$(make_case requires-invalid)
+  mkdir -p "$case_dir/projects"
+
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/project" --requires '../escape' \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "requires-invalid: a traversal id must be rejected"
+  grep -q 'invalid task id' "$case_dir/stderr" || fail "requires-invalid: refusal must name the invalid id"
+  pass "--requires rejects a path-unsafe task id"
+}
+
+test_verify_refuses_commit_without_push
+test_verify_refuses_pushed_branch_without_pr
+test_verify_refuses_pr_whose_file_list_lacks_the_work
+test_verify_refuses_missing_expected_deliverable
+test_verify_passes_verified_pr_and_records_evidence
+test_verify_refuses_unreachable_remote
+test_verify_scout_not_applicable
+test_override_is_loud_and_recorded
+test_override_requires_a_reason
+test_teardown_refuses_pushed_branch_without_pr
+test_teardown_passes_verified_pr_and_records_evidence
+test_spawn_requires_refuses_without_evidence
+test_spawn_requires_accepts_delivered_predecessor
+test_spawn_requires_accepts_scout_report
+test_spawn_requires_rejects_invalid_id
+
+echo "all fm-delivery-gate tests passed"
