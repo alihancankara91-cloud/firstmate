@@ -35,7 +35,11 @@
 # Endpoint removal is verified: after fm_backend_kill the endpoint must be
 # confirmed gone (retried once). A persisting endpoint FAILS the script,
 # because a successor launched while the old endpoint survives can still
-# receive input queued at it. This script never touches the task's worktree,
+# receive input queued at it. A herdr projection task (matching presentation
+# journal) is closed through the same focus-lock + focus-preserving path
+# fm-teardown.sh uses, and the close is REFUSED when that lock is
+# unavailable - never a silent fallback to a raw focus-unsafe pane close.
+# This script never touches the task's worktree,
 # metadata, status file, or backlog entry - rotation keeps the task identity,
 # and relaunch stays with the stuck-crewmate-recovery contract.
 #
@@ -93,6 +97,8 @@ fi
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
+# shellcheck source=bin/fm-lock-lib.sh
+. "$SCRIPT_DIR/fm-lock-lib.sh"
 
 FM_GUARD_CONTINUE_LINE='This is a supervision warning only; the agent exit WILL still proceed.' "$SCRIPT_DIR/fm-guard.sh" || true
 
@@ -100,7 +106,9 @@ ID=$1
 META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
 BACKEND=$(fm_backend_of_meta "$META")
-T=$(fm_backend_target_of_meta "$META")
+# A meta with no recorded endpoint is a legal recovered state: tolerate the
+# helper's nonzero return so the queued-request invalidation below still runs.
+T=$(fm_backend_target_of_meta "$META" 2>/dev/null || true)
 HARNESS=$(fm_meta_get "$META" harness)
 LABEL="fm-$ID"
 
@@ -167,9 +175,12 @@ if [ -n "$T" ] && fm_backend_target_exists "$BACKEND" "$T" "$LABEL" 2>/dev/null;
         echo "exit command did not land cleanly on $ID ($VERDICT); relying on endpoint removal" >&2
         ;;
     esac
-    # 4) Bounded wait for the agent process to actually end.
+    # 4) Bounded wait for the agent process to actually end. The bound is
+    # genuinely FM_AGENT_EXIT_WAIT seconds: iterations derive from the poll
+    # interval instead of counting polls as seconds.
+    POLL_ITERS=$(awk -v w="$EXIT_WAIT" -v p="$EXIT_POLL" 'BEGIN { if (p + 0 <= 0) p = 1; i = int(w / p); if (i * p < w) i += 1; if (i < 1) i = 1; print i }')
     WAITED=0
-    while [ "$WAITED" -lt "$EXIT_WAIT" ]; do
+    while [ "$WAITED" -lt "$POLL_ITERS" ]; do
       if [ "$(agent_state)" = dead ]; then
         GRACEFUL_EXIT=1
         break
@@ -191,16 +202,69 @@ else
   echo "no live endpoint recorded for $ID; nothing queued at it can reach a successor"
 fi
 
+# A herdr PROJECTION task (presentation journal present and matching the
+# recorded endpoint) must never get a raw pane close: mirror fm-teardown.sh's
+# focus-lock + focus-preserving close, and REFUSE when the lock is
+# unavailable rather than silently falling back to the focus-unsafe path
+# (captain decision 2026-07-23).
+HERDR_PROJECTION=0
+HERDR_SESSION=
+HERDR_PANE=
+HERDR_JOURNAL="$STATE/$ID.herdr-presentation"
+if [ "$BACKEND" = herdr ] \
+   && { [ -e "$HERDR_JOURNAL" ] || [ -L "$HERDR_JOURNAL" ]; }; then
+  fm_backend_source herdr || true
+  HERDR_SESSION=$(fm_meta_get "$META" herdr_session)
+  HERDR_WORKSPACE=$(fm_meta_get "$META" herdr_workspace_id)
+  HERDR_PANE=$(fm_meta_get "$META" herdr_pane_id)
+  if [ -n "$HERDR_SESSION" ] && [ -n "$HERDR_WORKSPACE" ] && [ -n "$HERDR_PANE" ] \
+     && [ "$T" = "$HERDR_SESSION:$HERDR_PANE" ] \
+     && fm_backend_herdr_projection_endpoint_matches_journal \
+       "$HERDR_SESSION" "$HERDR_WORKSPACE" "$HERDR_JOURNAL" "$ID"; then
+    HERDR_PROJECTION=1
+  else
+    echo "warning: herdr presentation journal for $ID does not match the recorded endpoint; the journal stays quarantined and only the ordinary task pane is closed" >&2
+  fi
+fi
+
 # 5) Remove the endpoint and verify it is gone. Destroying the pane destroys
 # its pty, and with it any input still buffered at the outgoing agent.
 if [ -n "$T" ] && fm_backend_target_exists "$BACKEND" "$T" "$LABEL" 2>/dev/null; then
-  fm_backend_kill "$BACKEND" "$T" "$(fm_meta_get "$META" zellij_tab_id)" "$LABEL" 2>/dev/null || true
-  if fm_backend_target_exists "$BACKEND" "$T" "$LABEL" 2>/dev/null; then
-    sleep 1
+  if [ "$HERDR_PROJECTION" = 1 ]; then
+    HERDR_FOCUS_LOCK=$(fm_backend_herdr_presentation_session_lock_path "$HERDR_SESSION") || {
+      echo "error: cannot resolve the herdr presentation focus lock for $ID; refusing a focus-unsafe pane close" >&2
+      exit 1
+    }
+    HERDR_FOCUS_LOCK_HELD=0
+    HERDR_FOCUS_LOCK_ATTEMPT=0
+    while [ "$HERDR_FOCUS_LOCK_ATTEMPT" -lt 50 ]; do
+      if fm_lock_try_acquire "$HERDR_FOCUS_LOCK"; then
+        HERDR_FOCUS_LOCK_HELD=1
+        break
+      fi
+      sleep 0.1
+      HERDR_FOCUS_LOCK_ATTEMPT=$((HERDR_FOCUS_LOCK_ATTEMPT + 1))
+    done
+    if [ "$HERDR_FOCUS_LOCK_HELD" != 1 ]; then
+      echo "error: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close for $ID. Retry once the lock holder finishes." >&2
+      exit 1
+    fi
+    fm_backend_herdr_projection_close_pane_focus_preserving \
+      "$HERDR_SESSION" "$HERDR_PANE" 2>/dev/null || true
+    fm_lock_release "$HERDR_FOCUS_LOCK" || true
+    if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_SESSION" "$HERDR_PANE")" != dead ]; then
+      echo "error: endpoint $T for $ID survived the focus-preserving close; a successor launched now could still receive input queued at it. Do not relaunch until the endpoint is confirmed gone." >&2
+      exit 1
+    fi
+  else
     fm_backend_kill "$BACKEND" "$T" "$(fm_meta_get "$META" zellij_tab_id)" "$LABEL" 2>/dev/null || true
     if fm_backend_target_exists "$BACKEND" "$T" "$LABEL" 2>/dev/null; then
-      echo "error: endpoint $T for $ID survived removal; a successor launched now could still receive input queued at it. Do not relaunch until the endpoint is confirmed gone." >&2
-      exit 1
+      sleep 1
+      fm_backend_kill "$BACKEND" "$T" "$(fm_meta_get "$META" zellij_tab_id)" "$LABEL" 2>/dev/null || true
+      if fm_backend_target_exists "$BACKEND" "$T" "$LABEL" 2>/dev/null; then
+        echo "error: endpoint $T for $ID survived removal; a successor launched now could still receive input queued at it. Do not relaunch until the endpoint is confirmed gone." >&2
+        exit 1
+      fi
     fi
   fi
 fi

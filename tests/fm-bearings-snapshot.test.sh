@@ -30,6 +30,9 @@ SH
 #!/usr/bin/env bash
 case "${1:-}" in
   display-message) case "$*" in *dead-*) exit 1 ;; *) printf '%%1\n' ;; esac ;;
+  # Strict existence probe (fm_backend_target_exists): a dead-* target is
+  # structurally gone, mirroring real tmux 3.7b's "can't find" stderr.
+  list-panes) case "$*" in *dead-*) echo "can't find window" >&2; exit 1 ;; esac ;;
   capture-pane)
     case "$*" in
       *fm-domain-alpha*) printf 'stale terminal summary: Phase 7 started\n> \n' ;;

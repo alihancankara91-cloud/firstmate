@@ -155,15 +155,22 @@ fm_backend_tmux_current_command() {  # <target>
 #             signal (bin/fm-bootstrap.sh's secondmate-liveness sweep gates a
 #             respawn on `dead` only).
 fm_backend_tmux_agent_alive() {  # <target>
-  local target=$1 comm
+  local target=$1 comm probe_err
   # Strict existence probe first: tmux 3.7b's display-message no longer fails
   # on a nonexistent target - it silently falls back to the session's current
   # pane (verified 2026-07-23, docs/tmux-backend.md "Nonexistent-target
   # fallback"), so an unguarded #{pane_current_command} read would classify
-  # the WRONG pane's process. A structurally-gone target is confidently dead,
-  # the same semantics herdr's classifier already uses for a gone pane.
-  if ! tmux list-panes -t "$target" >/dev/null 2>&1; then
-    printf 'dead'
+  # the WRONG pane's process. Only a CONFIRMED-gone target ("can't find
+  # window/session/pane", verified same doc section) is confidently dead -
+  # the same semantics herdr's classifier uses for a structurally-gone pane.
+  # Every other probe failure (no server running, tmux error, unresolvable
+  # target string) stays `unknown`, preserving the contract that unknown
+  # never licenses a respawn (bin/fm-bootstrap.sh gates on `dead` only).
+  if ! probe_err=$(tmux list-panes -t "$target" 2>&1 >/dev/null); then
+    case "$probe_err" in
+      *"can't find"*) printf 'dead' ;;
+      *) printf 'unknown' ;;
+    esac
     return 0
   fi
   comm=$(fm_backend_tmux_current_command "$target") || { printf 'unknown'; return 0; }

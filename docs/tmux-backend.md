@@ -97,7 +97,8 @@ The reference behavior this backend was verified against (tmux 3.6a) errored on 
 Consequences applied in the adapters:
 
 - `fm_backend_target_exists` (`bin/fm-backend.sh`) probes with `list-panes -t`, which still hard-errors on a gone target.
-- `fm_backend_tmux_agent_alive` (`bin/backends/tmux.sh`) runs the same strict existence probe before reading `#{pane_current_command}` and classifies a structurally-gone target as `dead`, matching herdr's gone-pane semantics, instead of classifying whichever pane tmux fell back to.
+- `fm_backend_tmux_agent_alive` (`bin/backends/tmux.sh`) runs the same strict probe before reading `#{pane_current_command}`, instead of classifying whichever pane tmux fell back to.
+  Probe failures split by the verified error text: `can't find window: <w>` / `can't find session: <s>` (missing window and missing session, each exit 1 on 3.7b) confirm the target structurally gone and classify `dead`, matching herdr's gone-pane semantics; any other failure, such as `no server running on <socket>`, is unreadable-not-gone and stays `unknown`, which never licenses a respawn.
 
 ## Submit acknowledgement: "landed" is empty (with one busy-queue exception)
 
