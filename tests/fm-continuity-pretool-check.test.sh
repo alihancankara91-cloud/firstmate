@@ -80,6 +80,7 @@ test_fm_send_allowed_during_watcher_lapse() {
   expect_allow "absolute-path steer during watcher lapse" "$PRIMARY/bin/fm-send.sh task hi"
   expect_allow "special-key steer during watcher lapse" 'bin/fm-send.sh task --key Escape'
   expect_allow "drain then steer during watcher lapse" 'bin/fm-wake-drain.sh; FM_HOME=/tmp/home bin/fm-send.sh task hi'
+  expect_allow "wedged-agent rotation during watcher lapse" 'FM_HOME=/tmp/home bin/fm-agent-exit.sh task'
   pass "continuity gate never forces the authenticated steer channel onto a bypass"
 }
 

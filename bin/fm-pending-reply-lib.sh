@@ -44,7 +44,7 @@
 #   recovery_turn_completed_epoch=
 #   escalated_epoch=
 #   resolved_epoch=
-#   resolved_via=           status | document | helper | empty
+#   resolved_via=           status | document | helper | rotation | empty
 #   wrong_home_hits=        count of corr sightings under the secondmate home
 #   wrong_home_sightings=   comma-separated identities of counted sightings
 #   wrong_home_scan_signature=
@@ -1010,6 +1010,41 @@ fm_pending_reply_tick() {  # <state-dir>
       fi
     fi
     fm_pending_reply_tick_one "$state" "$corr" "$busy" "$sm_home" || true
+  done
+  return 0
+}
+
+# Invalidate every open pending-reply expectation for a task before its agent
+# is rotated (bin/fm-agent-exit.sh). A request queued at or unanswered by the
+# OUTGOING agent must never chase the task's successor: the successor has no
+# session context for the old correlation id, so a recovery resend or
+# escalation delivered after rotation reads as a possibly spoofed instruction
+# (2026-07-23 incident: a queued /exit surfaced in front of a successor with a
+# correlation id that no longer resolved). Closing each record as
+# resolved_via=rotation keeps the durable audit trail while making every later
+# tick, recovery send, and escalation a guaranteed no-op for that record.
+# Prints one corr id per invalidated record; matching nothing is success.
+fm_pending_reply_invalidate_task() {  # <state-dir> <task_id>
+  local state=$1 task_id=$2 dir rec tid phase corr now
+  dir=$(fm_pending_reply_dir "$state")
+  [ -d "$dir" ] || return 0
+  now=$(fm_pending_reply_now)
+  for rec in "$dir"/*; do
+    [ -f "$rec" ] || continue
+    case "$(basename "$rec")" in
+      .*) continue ;;
+    esac
+    tid=$(fm_pending_reply_get "$rec" task_id)
+    [ "$tid" = "$task_id" ] || continue
+    phase=$(fm_pending_reply_get "$rec" phase)
+    [ "$phase" != resolved ] || continue
+    corr=$(fm_pending_reply_get "$rec" corr_id)
+    [ -n "$corr" ] || corr=$(basename "$rec")
+    fm_pending_reply_set "$rec" phase resolved || return 1
+    fm_pending_reply_set "$rec" resolved_epoch "$now" || return 1
+    fm_pending_reply_set "$rec" resolved_via rotation || return 1
+    rm -f "$(fm_pending_reply_delivery_confirmation_path "$state" "$corr")" 2>/dev/null || true
+    printf '%s\n' "$corr"
   done
   return 0
 }

@@ -42,7 +42,9 @@ Escalate in order:
 2. If the crewmate is waiting on a question its brief already answers, answer in one line via `FM_HOME=<this-firstmate-home> bin/fm-send.sh` from an active firstmate session unless `FM_HOME` is already set to the active firstmate home.
 3. If the crewmate is confused or looping, interrupt with the adapter's interrupt key, then redirect with one corrective line.
    For example, for a single-Escape adapter: `FM_HOME=<this-firstmate-home> bin/fm-send.sh <window> --key Escape`.
-4. If the crewmate is genuinely wedged after redirection, exit the agent with the adapter's exit command and relaunch with the same brief plus a `progress so far` note appended to it.
+4. If the crewmate is genuinely wedged after redirection, shut its agent down with `FM_HOME=<this-firstmate-home> bin/fm-agent-exit.sh <task-id>` and relaunch with the same brief plus a `progress so far` note appended to it.
+   That script is the one owner of safe shutdown: it invalidates queued marked requests so nothing chases the successor, interrupts FIRST (a wedged agent queues a typed exit command behind work it cannot reach), then exits, then removes the endpoint and verifies it is gone.
+   Do not hand-type the interrupt/exit sequence or kill the endpoint with raw backend commands when this script can run.
    Genuine wedging means looping, unresponsive, repeating the same obstacle, or truly dead.
    A low context reading is not wedging; modern harnesses auto-compact and keep going.
    The worktree and commits persist, so relaunch is cheap.

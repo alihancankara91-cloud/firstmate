@@ -21,7 +21,17 @@ import { Lexer, commandPosition, splitProgram } from "./fm-arm-command-policy.mj
 // which a secondmate correctly refuses for consequential instructions
 // (2026-07-23 incident: 68 legal notices held for an hour on unattributable
 // instructions delivered around this gate).
-const ALLOWED_SCRIPTS = new Set(["fm-wake-drain.sh", "fm-watch-arm.sh", "fm-teardown.sh", "fm-send.sh"]);
+// fm-agent-exit.sh is allowed for the same reason: rotating a wedged agent is
+// itself a lapse-window recovery action, and blocking the safe owner (which
+// drains queued requests and interrupts before exiting) would push recovery
+// onto raw backend kill commands this gate cannot see.
+const ALLOWED_SCRIPTS = new Set([
+  "fm-wake-drain.sh",
+  "fm-watch-arm.sh",
+  "fm-teardown.sh",
+  "fm-send.sh",
+  "fm-agent-exit.sh",
+]);
 
 function parseArguments(argv) {
   const result = { command: "", root: "" };

@@ -86,6 +86,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-promote.sh`          | Promote a scout task in place to a protected ship task                               |
 | `fm-delivery-lib.sh`     | Own the fail-closed contract for verifying a ship task's work is delivered on the remote |
 | `fm-delivery-gate.sh`    | Verify, record expected deliverables for, and loudly override a task's delivery gate |
+| `fm-agent-exit.sh`       | Safely shut down a task's agent: drain queued marked requests, interrupt-then-exit, verified endpoint removal |
 | `fm-teardown.sh`         | Fail-closed teardown: return landed, delivery-verified ship worktrees, require completed scout deliverables, retire secondmate homes |
 | `fm-harness.sh`          | Detect the running harness and resolve crew or secondmate harness, model, and effort |
 | `fm-lock.sh`             | Per-home firstmate session lock                                                      |
