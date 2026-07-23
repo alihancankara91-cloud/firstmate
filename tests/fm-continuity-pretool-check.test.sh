@@ -41,7 +41,7 @@ expect_deny() {
   [ ! -s "$OUT" ] || fail "$label deny wrote stdout: $(cat "$OUT")"
   jq -e '.hookSpecificOutput.hookEventName == "PreToolUse" and .hookSpecificOutput.permissionDecision == "deny"' "$ERR" >/dev/null 2>&1 \
     || fail "$label deny omitted Claude's permission decision: $(cat "$ERR")"
-  [ -n "$expected" ] || expected="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $blocked)"
+  [ -n "$expected" ] || expected="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, steer live workers with bin/fm-send.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $blocked)"
   actual=$(jq -r '.systemMessage' "$ERR")
   [ "$actual" = "$expected" ] || fail "$label recovery guidance changed: $actual"
 }
@@ -62,9 +62,25 @@ test_gate_scope_and_recovery_exceptions() {
   # shellcheck disable=SC2016  # single quotes are deliberate: "$TEARDOWN_MODE" is literal test data (an unsafe shell-expanded arg the gate must deny), not an expansion here
   expect_deny "dynamic teardown mode is not recovery" 'bin/fm-teardown.sh task "$TEARDOWN_MODE"' 'fm-teardown.sh' "$unsafe_teardown_reason"
   expect_deny "unrelated fleet command" 'bin/fm-crew-state.sh task' 'fm-crew-state.sh'
-  expect_deny "recovery bundled with unrelated fleet command" 'bin/fm-wake-drain.sh; bin/fm-send.sh task hi' 'fm-send.sh'
+  expect_deny "recovery bundled with unrelated fleet command" 'bin/fm-wake-drain.sh; bin/fm-spawn.sh task' 'fm-spawn.sh'
   expect_deny "literal nested fleet command" "bash -lc 'bin/fm-bootstrap.sh'" 'fm-bootstrap.sh'
   pass "continuity gate allows recovery and ordinary commands but denies only other fleet execution"
+}
+
+# The 2026-07-23 regression: tasks in flight (state/task.meta exists) and no
+# watcher lock - the exact mid-wake-handling lapse window - must never block
+# the authenticated steer channel. Blocking fm-send here forced steers onto
+# raw backend delivery with no firstmate identity marker, which a secondmate
+# correctly refused for consequential instructions.
+test_fm_send_allowed_during_watcher_lapse() {
+  [ -f "$STATE/task.meta" ] || printf 'project=fixture\n' > "$STATE/task.meta"
+  [ ! -d "$STATE/.watch.lock" ] || fail "fixture expects no live watcher lock"
+  expect_allow "authenticated steer during watcher lapse" 'bin/fm-send.sh task continue with the brief'
+  expect_allow "env-prefixed steer during watcher lapse" 'FM_HOME=/tmp/home bin/fm-send.sh task hi'
+  expect_allow "absolute-path steer during watcher lapse" "$PRIMARY/bin/fm-send.sh task hi"
+  expect_allow "special-key steer during watcher lapse" 'bin/fm-send.sh task --key Escape'
+  expect_allow "drain then steer during watcher lapse" 'bin/fm-wake-drain.sh; FM_HOME=/tmp/home bin/fm-send.sh task hi'
+  pass "continuity gate never forces the authenticated steer channel onto a bypass"
 }
 
 test_live_lock_allows_fleet_command_even_with_stale_beacon() {
@@ -98,10 +114,10 @@ test_child_worktree_and_malformed_input_fail_open() {
   git -C "$PRIMARY" worktree add -q -b fixture-child "$child"
   mkdir -p "$child/bin" "$child/state"
   FM_ROOT_OVERRIDE="$child" FM_HOME="$child" FM_STATE_OVERRIDE="$child/state" \
-    "$CHECK" --command 'bin/fm-send.sh task hi' > "$OUT" 2> "$ERR" || rc=$?
+    "$CHECK" --command 'bin/fm-spawn.sh task' > "$OUT" 2> "$ERR" || rc=$?
   [ "$rc" -eq 0 ] || fail "linked child worktree must be out of continuity-gate scope"
 
-  expect_allow "malformed dynamic shell" "bin/fm-send.sh 'unterminated"
+  expect_allow "malformed dynamic shell" "bin/fm-spawn.sh 'unterminated"
   printf '%s' '{not-json' | FM_ROOT_OVERRIDE="$PRIMARY" FM_HOME="$PRIMARY" FM_STATE_OVERRIDE="$STATE" \
     "$CHECK" > "$OUT" 2> "$ERR" || rc=$?
   [ "$rc" -eq 0 ] || fail "malformed Claude transport must fail open"
@@ -120,6 +136,7 @@ test_claude_hook_registration_preserves_stop_backstop() {
 }
 
 test_gate_scope_and_recovery_exceptions
+test_fm_send_allowed_during_watcher_lapse
 test_live_lock_allows_fleet_command_even_with_stale_beacon
 test_child_worktree_and_malformed_input_fail_open
 test_claude_hook_registration_preserves_stop_backstop

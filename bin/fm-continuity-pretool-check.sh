@@ -2,11 +2,16 @@
 # Claude primary watcher-continuity PreToolUse gate.
 #
 # This hook is deliberately narrow. It denies only an executed bin/fm-*.sh fleet
-# command other than bin/fm-wake-drain.sh, bin/fm-watch-arm.sh, or the
-# independently fail-closed bin/fm-teardown.sh, and only when the active primary
-# home has task metadata in flight but no identity-matched live watcher holds the
-# home lock. Ordinary shell commands, recovery commands, healthy supervision,
-# fleet-idle homes, and child worktrees are always allowed.
+# command other than bin/fm-wake-drain.sh, bin/fm-watch-arm.sh, the
+# independently fail-closed bin/fm-teardown.sh, or the authenticated steer
+# channel bin/fm-send.sh, and only when the active primary home has task
+# metadata in flight but no identity-matched live watcher holds the home lock.
+# Ordinary shell commands, recovery commands, steers, healthy supervision,
+# fleet-idle homes, and child worktrees are always allowed. fm-send is exempt
+# by design, not convenience: the watcher lapses between every wake by design,
+# and a gate that blocks the authenticated send path there forces steers onto
+# raw backend delivery with no firstmate identity marker (see
+# bin/fm-continuity-command-policy.mjs for the incident record).
 #
 # The existing turn-end guard remains the unchanged final backstop. This gate
 # closes the long-turn gap before another fleet mutation, but does not replace or
@@ -27,7 +32,8 @@ Usage: fm-continuity-pretool-check.sh [--command <shell-command>]
 
 Reads Claude PreToolUse JSON from stdin unless --command is supplied.
 Exits 0 to allow. Exits 2 with a Claude deny object on stderr only when an
-unhealthy primary tries to execute a non-recovery firstmate fleet script.
+unhealthy primary tries to execute a firstmate fleet script that is neither
+a recovery command nor the authenticated steer channel bin/fm-send.sh.
 EOF
 }
 
@@ -105,7 +111,7 @@ case "$REASON_CODE" in
     REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; during recovery only the ordinary literal bin/fm-teardown.sh is allowed, so drop --force and any shell-expanded arguments and retry the literal invocation (blocked: $BLOCKED_SCRIPT)"
     ;;
   *)
-    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
+    REASON="[watcher-continuity] tasks are in flight and no live watcher holds this home lock; drain wakes with bin/fm-wake-drain.sh, steer live workers with bin/fm-send.sh, use fail-closed bin/fm-teardown.sh for completed tasks when needed, then re-arm with bin/fm-watch-arm.sh as a tracked Claude background task before running other fleet commands (blocked: $BLOCKED_SCRIPT)"
     ;;
 esac
 ESCAPED=$(printf '%s' "$REASON" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n' ' ')
