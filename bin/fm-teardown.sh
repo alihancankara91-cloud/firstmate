@@ -22,13 +22,24 @@
 # A gh lookup error falls back to the content check; if that is also inconclusive,
 # teardown refuses rather than risk discarding unlanded work.
 # Uncommitted changes are never landed.
+# ON TOP of the landed test, a non-force ship teardown must clear the delivery
+# gate owned by bin/fm-delivery-lib.sh: verified remote delivery (a raised PR
+# whose forge-side file list contains the work, or content already on the remote
+# default branch), with a recorded loud override as the only exception. A pass
+# writes durable data/<id>/delivered.md evidence consumed by fm-spawn --requires.
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge after configured approval) as a fallback
 # for the common case where there is no remote at all.
+# A not-applicable gate result (nothing was produced, or an unprovable
+# local-only containment) lets teardown proceed but records NO delivered.md, and
+# the evidence saying so is printed rather than swallowed.
 # Scout tasks (kind=scout in meta) carve out of that check: their worktree is
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
+# Once BOTH of those pass, teardown writes the scout's own data/<id>/delivered.md
+# through bin/fm-delivery-lib.sh, because that record - not the report file - is
+# what fm-spawn --requires reads for a dependent step.
 # Before destructive cleanup, teardown validates task check artifacts and any
 # matching quarantine entries as ordinary single-link files on the state
 # device. It refuses and preserves task state when that proof fails; otherwise
@@ -106,6 +117,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-delivery-lib.sh
+. "$SCRIPT_DIR/fm-delivery-lib.sh"
 if [ "$#" -lt 1 ] || ! fm_task_id_path_safe "$1"; then
   echo "error: invalid teardown request" >&2
   exit 2
@@ -1064,6 +1077,14 @@ if [ "$KIND" = scout ] && [ "$FORCE" != "--force" ]; then
     echo "Inventory its report and any visual review through bin/fm-decision-hold.sh before teardown." >&2
     exit 1
   fi
+  # Both scout gates have now passed, so - and only now - the scout gets the
+  # same durable delivery evidence a ship task earns from the delivery gate.
+  # fm-spawn --requires reads delivered.md and nothing else; the report file by
+  # itself never satisfied firstmate's gates, only the worker's writing hand.
+  fm_delivery_record_scout_report "$ID" "$DATA" "$REPORT" || {
+    echo "error: could not write durable delivery record data/$ID/delivered.md" >&2
+    exit 1
+  }
 fi
 
 if [ "$BACKEND" = orca ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$FORCE" != "--force" ]; then
@@ -1087,6 +1108,38 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
     else
       exit 1
     fi
+  fi
+fi
+
+# Delivery gate (bin/fm-delivery-lib.sh owns the contract): a ship task cannot
+# complete on a commit, a pushed branch, or a green pipeline - its work must be
+# verifiably delivered on the remote (a raised PR whose forge-side file list
+# contains the work, or content already on the remote default branch). Strictly
+# additive to the unlanded-work refusal above, which stays exactly as strict.
+# Runs only when the worktree still exists (a vanished worktree is debris
+# cleanup, not a completion claim); --force is explicit captain discard
+# authority and skips it like the other ordinary-task checks. A pass writes the
+# durable data/<id>/delivered.md evidence that fm-spawn --requires reads.
+if [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
+  if fm_delivery_verify "$ID" "$STATE" "$DATA"; then
+    case "$FM_DELIVERY_RESULT" in
+      # An override is loud by contract; a not-applicable result means teardown
+      # proceeds while NO delivery evidence is recorded, which must never be
+      # silent either - the operator has to see that dependents stay blocked.
+      override|not-applicable) printf '%s\n' "$FM_DELIVERY_EVIDENCE" ;;
+    esac
+    if [ "$FM_DELIVERY_RESULT" != not-applicable ]; then
+      fm_delivery_record "$ID" "$DATA" || {
+        echo "error: could not write durable delivery record data/$ID/delivered.md" >&2
+        exit 1
+      }
+    fi
+  else
+    echo "REFUSED: task $ID has not cleared the delivery gate; its work is not verifiably delivered." >&2
+    printf '%s\n' "$FM_DELIVERY_REASONS" >&2
+    echo "A commit is not delivery; neither is a pushed branch or a green pipeline." >&2
+    echo "Deliver the work (raise the PR and verify with bin/fm-delivery-gate.sh verify $ID), record a deliberate exception (bin/fm-delivery-gate.sh override $ID --reason '<why>'), or get the captain's explicit OK to discard, then --force." >&2
+    exit 1
   fi
 fi
 
@@ -1199,7 +1252,7 @@ fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
-rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token"
+rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" "$STATE/$ID.delivery-override"
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

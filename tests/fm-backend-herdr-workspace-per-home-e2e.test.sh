@@ -101,6 +101,10 @@ make_scratch_project() {  # <dir>
 
 PROJ1="$TMP_ROOT/scratch-project-1"; make_scratch_project "$PROJ1"
 PROJ2="$TMP_ROOT/scratch-project-2"; make_scratch_project "$PROJ2"
+# Register the scratch projects as local-only in their homes: they have no
+# remote, so a PR-mode task could never clear the delivery gate at teardown.
+printf -- '- scratch-project-1 [local-only] - herdr e2e scratch (added 2026-07-23)\n' > "$PRIMARY_HOME/data/projects.md"
+printf -- '- scratch-project-2 [local-only] - herdr e2e scratch (added 2026-07-23)\n' > "$SM_HOME/data/projects.md"
 
 # --- 1. primary-shaped home: a crewmate spawns into the "firstmate" space ---
 

@@ -72,7 +72,7 @@ make_case() {
   local name=$1 case_dir fakebin
   case_dir="$TMP_ROOT/$name"
   fakebin="$case_dir/fakebin"
-  mkdir -p "$case_dir/state" "$case_dir/config" "$fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/config" "$case_dir/data" "$fakebin"
 
   # Mocks for the post-check teardown steps. Refuse logic exits before these
   # run; the ALLOW cases need them so the script can complete cleanly.
@@ -208,8 +208,13 @@ land_on_origin_main() {
 }
 
 # Override GitHub lookups to report PR 7 as merged with the supplied head.
+# Any further args are the PR's own file list served by `pr diff --name-only`
+# (defaulting to feature.txt, the path the fixtures commit), which the delivery
+# gate reads from the forge.
 add_gh_pr_merged_for_head() {
   local case_dir=$1 head=$2
+  shift 2
+  printf '%s\n' "${@:-feature.txt}" > "$case_dir/pr-files.txt"
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 case "${1:-} ${2:-}" in
@@ -225,8 +230,14 @@ SH
 case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
+      *"baseRefName"*) printf '%s\n' 'main' ; exit 0 ;;
       *"state,headRefOid"*) printf '%s\t%s\n' 'MERGED' '$head' ; exit 0 ;;
       *"headRefOid"*) printf '%s\n' '$head' ; exit 0 ;;
+    esac
+    ;;
+  "pr diff")
+    case " \$* " in
+      *" --name-only "*) cat '$case_dir/pr-files.txt' ; exit 0 ;;
     esac
     ;;
 esac
@@ -255,17 +266,35 @@ commit_tree_from_wt_head() {
   printf '%s\n' "$msg" | git -C "$case_dir/wt" commit-tree "$tree" -p "$parent"
 }
 
-land_equivalent_patch_on_origin_branch() {
-  local case_dir=$1 branch=$2 file=$3 content=$4 msg=$5 tmp
+# Build <branch> on origin as a PR head that genuinely carries every one of the
+# task branch's patches: each <file>=<content> pair is replayed as its own commit
+# on top of origin's default branch, in order. Because the branch really holds
+# them, a real `gh pr diff <n> --name-only` for it would print exactly those
+# files - the mock never has to be widened past what the forge would say.
+# Args: case_dir branch <file>=<content>...
+land_equivalent_patches_on_origin_branch() {
+  local case_dir=$1 branch=$2 tmp pair file content
+  shift 2
   tmp="$case_dir/_equiv"
   git clone -q "$case_dir/origin.git" "$tmp"
-  printf '%s\n' "$content" > "$tmp/$file"
-  git -C "$tmp" add -- "$file"
-  git -C "$tmp" -c user.email=t@t -c user.name=t commit -q -m "$msg"
+  for pair in "$@"; do
+    file=${pair%%=*}
+    content=${pair#*=}
+    printf '%s\n' "$content" > "$tmp/$file"
+    git -C "$tmp" add -- "$file"
+    git -C "$tmp" -c user.email=t@t -c user.name=t commit -q -m "replay $file"
+  done
   git -C "$tmp" push -q origin "HEAD:refs/heads/$branch"
   git -C "$case_dir/project" fetch -q origin "$branch"
   rm -rf "$tmp"
   git -C "$case_dir/project" rev-parse "refs/remotes/origin/$branch"
+}
+
+# The file list a real `gh pr diff --name-only` would print for a PR whose head
+# is <head> and whose base is origin's default branch. Args: case_dir head
+pr_file_list_for_head() {
+  local case_dir=$1 head=$2
+  git -C "$case_dir/project" diff --name-only "refs/remotes/origin/main...$head"
 }
 
 # Override gh-axi so every call fails, simulating an API/network error.
@@ -493,6 +522,7 @@ run_teardown() {
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
   PATH="$case_dir/fakebin:$PATH" \
     "$TEARDOWN" task-x1 "$@"
 }
@@ -703,7 +733,8 @@ test_no_pr_recorded_discovers_merged_pr_by_branch_allows() {
 }
 
 test_squash_merged_pr_allows_replayed_unpushed_patch() {
-  local case_dir rc parent_head pr_head
+  local case_dir rc parent_head pr_head f
+  local -a pr_files
   case_dir=$(make_case squash-replayed-patch)
   write_meta "$case_dir" no-mistakes ship
   wt_commit_file "$case_dir" local-parent.txt parent "local parent"
@@ -712,8 +743,18 @@ test_squash_merged_pr_allows_replayed_unpushed_patch() {
   git -C "$case_dir/project" fetch -q origin fm/task-x1
   wt_commit_file "$case_dir" feature.txt hello "add feature"
   append_pr_meta_url "$case_dir"
-  pr_head=$(land_equivalent_patch_on_origin_branch "$case_dir" pr-head feature.txt hello "add feature")
-  add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  # The PR head carries BOTH of the task branch's patches as its own two commits,
+  # so the mocked file list below is exactly what the forge would report for it.
+  pr_head=$(land_equivalent_patches_on_origin_branch "$case_dir" pr-head \
+    local-parent.txt=parent feature.txt=hello)
+  pr_files=()
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    pr_files+=("$f")
+  done < <(pr_file_list_for_head "$case_dir" "$pr_head")
+  [ "${#pr_files[@]}" -eq 2 ] \
+    || fail "squash-replayed-patch: test setup bug, PR head should change exactly two files"
+  add_gh_pr_merged_for_head "$case_dir" "$pr_head" "${pr_files[@]}"
 
   set +e
   run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
