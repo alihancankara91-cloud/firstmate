@@ -892,6 +892,9 @@ make_teardown_fakebin() {  # <dir> -> echoes fakebin dir; logs tmux+treehouse ca
 #!/usr/bin/env bash
 set -u
 { printf 'tmux'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
+# The strict existence probe (list-panes) reports the window gone so the new
+# teardown's verified endpoint removal sees a clean first kill.
+[ "${1:-}" != list-panes ] || exit 1
 exit 0
 SH
   cat > "$fb/treehouse" <<'SH'
@@ -952,8 +955,15 @@ test_teardown_conformance_old_vs_new() {
 
   expect_code 0 "$rc_old" "old fm-teardown.sh (scout, report present) should succeed"$'\n'"$out_old"
   expect_code 0 "$rc_new" "new fm-teardown.sh (scout, report present) should succeed"$'\n'"$out_new"
-  diff -u "$log_old" "$log_new" > "$TMP_ROOT/teardown-diff.txt" 2>&1 \
+  # The verified endpoint removal (kill_endpoint_verified) adds a strict
+  # list-panes existence probe after the kill - a deliberate post-P1 behavior
+  # change (2026-07-23 panel-residue hygiene), so probe lines are excluded
+  # from the byte-parity check while everything else must remain identical.
+  grep -v $'^tmux\x1flist-panes' "$log_new" > "$TMP_ROOT/teardown-new-normalized.log" || true
+  diff -u "$log_old" "$TMP_ROOT/teardown-new-normalized.log" > "$TMP_ROOT/teardown-diff.txt" 2>&1 \
     || fail "fm-teardown.sh: tmux+treehouse command log differs old vs new"$'\n'"$(cat "$TMP_ROOT/teardown-diff.txt")"
+  assert_contains "$(cat "$log_new")" "tmux"$'\x1f''list-panes' \
+    "teardown did not verify the endpoint after killing it"
   assert_contains "$(cat "$log_new")" "treehouse"$'\x1f''return'$'\x1f''--force'$'\x1f'"$wt" \
     "teardown did not call treehouse return --force <worktree>"
   assert_contains "$(cat "$log_new")" "tmux"$'\x1f''kill-window'$'\x1f''-t'$'\x1f'"firstmate:fm-$id" \

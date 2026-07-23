@@ -77,6 +77,28 @@ It reads tmux's own `#{pane_current_command}`, which reports the pane's live for
 Agent liveness and composer safety are separate checks.
 During away-mode escalation delivery, `fm_tmux_composer_state` sends a bare shell glyph on an unbordered row to the shared composer classifier as `unknown`, and the daemon injects only into an affirmatively `empty` composer; see [Composer-emptiness safety](herdr-backend.md#composer-emptiness-safety-2026-07-10-fleet-wide-across-all-four-backends).
 
+## Nonexistent-target fallback (verified 2026-07-23, tmux 3.7b)
+
+`display-message -t <target>` no longer fails when the target window does not exist: it silently resolves to the session's current pane, even with exact-match `=` syntax.
+Verified on tmux 3.7b with a session `rot` holding only its default `zsh` window:
+
+```text
+$ tmux display-message -p -t rot:doesnotexist '#{pane_id}'
+%0        (exit 0)
+$ tmux display-message -p -t '=rot:=fm-rot1' '#{pane_id}'
+%0        (exit 0)
+$ tmux list-panes -t rot:doesnotexist
+(exit 1)
+$ tmux capture-pane -p -t rot:doesnotexist ; tmux send-keys -t rot:doesnotexist x ; tmux kill-window -t rot:doesnotexist
+(each exit 1)
+```
+
+The reference behavior this backend was verified against (tmux 3.6a) errored on the same probe, so any pane-presence or `#{pane_current_command}` read through `display-message` can silently answer for the WRONG pane on 3.7b once the target window is gone.
+Consequences applied in the adapters:
+
+- `fm_backend_target_exists` (`bin/fm-backend.sh`) probes with `list-panes -t`, which still hard-errors on a gone target.
+- `fm_backend_tmux_agent_alive` (`bin/backends/tmux.sh`) runs the same strict existence probe before reading `#{pane_current_command}` and classifies a structurally-gone target as `dead`, matching herdr's gone-pane semantics, instead of classifying whichever pane tmux fell back to.
+
 ## Submit acknowledgement: "landed" is empty (with one busy-queue exception)
 
 The shared `fm_tmux_submit_enter_core` (`bin/fm-tmux-lib.sh`) types the message once, then retries Enter (Enter only, never a retype) until the composer clears.

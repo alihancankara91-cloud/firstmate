@@ -33,7 +33,8 @@ case "${1:-}" in
     done
     printf 'send-keys target=%s literal=%s arg=%s\n' "$target" "$literal" "${1:-}" >> "$FM_TMUX_LOG"
     exit 0 ;;
-  display-message)
+  display-message|list-panes)
+    subcmd=${1:-}
     target=
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -44,7 +45,7 @@ case "${1:-}" in
     if [ -n "${FM_FAKE_TMUX_DEAD_TARGET:-}" ] && [ "$target" = "$FM_FAKE_TMUX_DEAD_TARGET" ]; then
       exit 1
     fi
-    printf '%%1\n'
+    [ "$subcmd" = list-panes ] || printf '%%1\n'
     exit 0 ;;
   capture-pane)
     printf '\xe2\x94\x82 \xe2\x94\x82\n'

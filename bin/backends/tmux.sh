@@ -156,6 +156,16 @@ fm_backend_tmux_current_command() {  # <target>
 #             respawn on `dead` only).
 fm_backend_tmux_agent_alive() {  # <target>
   local target=$1 comm
+  # Strict existence probe first: tmux 3.7b's display-message no longer fails
+  # on a nonexistent target - it silently falls back to the session's current
+  # pane (verified 2026-07-23, docs/tmux-backend.md "Nonexistent-target
+  # fallback"), so an unguarded #{pane_current_command} read would classify
+  # the WRONG pane's process. A structurally-gone target is confidently dead,
+  # the same semantics herdr's classifier already uses for a gone pane.
+  if ! tmux list-panes -t "$target" >/dev/null 2>&1; then
+    printf 'dead'
+    return 0
+  fi
   comm=$(fm_backend_tmux_current_command "$target") || { printf 'unknown'; return 0; }
   comm=${comm#-}
   case "$comm" in

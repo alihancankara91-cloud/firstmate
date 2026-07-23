@@ -79,6 +79,11 @@ if [ "${1:-}" = "capture-pane" ]; then
   fi
   exit 0
 fi
+if [ "${1:-}" = "list-panes" ]; then
+  # The strict existence probe fm_backend_tmux_agent_alive now runs before
+  # reading pane_current_command; the fake pane always exists here.
+  exit 0
+fi
 if [ "${1:-}" = "display-message" ]; then
   case "$*" in
     *pane_current_command*) printf '%s\n' "${FM_FAKE_TMUX_CURRENT_COMMAND:-}"; exit 0 ;;
@@ -125,6 +130,11 @@ make_supercase() {
 #!/usr/bin/env bash
 set -u
 case "${1:-}" in
+  list-panes)
+    # The strict existence probe fm_backend_target_exists uses; honors the
+    # same alive flag as display-message so tests can flip pane liveness.
+    [ "${FM_FAKE_TMUX_PANE_ALIVE:-1}" = "1" ] || exit 1
+    exit 0 ;;
   display-message)
     [ "${FM_FAKE_TMUX_PANE_ALIVE:-1}" = "1" ] || exit 1
     _print=0
@@ -213,6 +223,7 @@ case "${1:-}" in
     [ "$print" = 1 ] && printf 'fakepane\n'
     exit 0 ;;
   capture-pane) cat "$COMPOSER" 2>/dev/null; exit 0 ;;
+  list-panes) exit 0 ;;
   list-windows) exit 0 ;;
   send-keys)
     shift

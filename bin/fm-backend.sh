@@ -659,7 +659,11 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
   local backend=$1 target=$2 expected_label=${3:-} session pane
   case "$backend" in
     tmux)
-      tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1
+      # list-panes, not display-message: tmux 3.7b's display-message no longer
+      # fails on a nonexistent target - it silently falls back to the current
+      # pane (verified 2026-07-23, docs/tmux-backend.md "Nonexistent-target
+      # fallback"), which made this probe report gone windows as alive.
+      tmux list-panes -t "$target" >/dev/null 2>&1
       ;;
     herdr)
       fm_backend_source herdr || return 1
@@ -702,8 +706,9 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
 # bin/fm-bootstrap.sh's session-start secondmate-liveness sweep exists to
 # close (AGENTS.md "Session start"). Prints one of:
 #   alive   - a real agent process is confirmed running.
-#   dead    - CONFIDENTLY not an agent: a bare shell (tmux) or a
-#             structurally-gone/no-agent-registered pane (herdr).
+#   dead    - CONFIDENTLY not an agent: a bare shell or structurally-gone
+#             window (tmux) or a structurally-gone/no-agent-registered pane
+#             (herdr).
 #   unknown - anything ambiguous, unreadable, or unverified for this backend.
 # Scoped to today's --secondmate-spawn-capable backends with an empirically
 # verified classifier: tmux (docs/tmux-backend.md "Agent liveness probe") and
