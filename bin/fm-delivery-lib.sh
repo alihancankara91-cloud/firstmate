@@ -23,6 +23,15 @@
 #     fetched default tree. This arm covers the captain-authorized pr-less
 #     merge flow on repos with no PR CI.
 #
+#     ONE VIEW OF THE REMOTE: the remote default branch is fetched exactly once
+#     per verification, up front, and every question asked of it - both "did
+#     this worktree produce anything?" and the containment proof itself - is
+#     answered against that one freshly fetched ref. Judging the two against
+#     different views (an unfetched remote-tracking ref for one, a fetched one
+#     for the other) would make the SAME delivery pass or come back empty
+#     depending only on how stale the local ref happened to be. A fetch failure
+#     fails this arm closed, exactly like any other error.
+#
 #   Arm P (raised pull request): a PR is resolvable for the task (recorded
 #     pr= metadata, or discovered from the branch name), the PR is open or
 #     merged (a closed-unmerged PR is not a delivery vehicle), the local HEAD
@@ -45,11 +54,19 @@
 #   there is nothing to verify, so the gate returns not-applicable with evidence
 #   saying exactly that. Teardown of such a contentless worktree proceeds (it is
 #   debris cleanup, not a completion claim) but NO delivered.md is written, so a
-#   later fm-spawn --requires on that task stays closed. Work that landed by
-#   fast-forward or rebase is indistinguishable from a contentless worktree in
-#   git - both leave HEAD reachable from the default branch with an empty net
-#   diff - so record the expected deliverable paths (bin/fm-delivery-gate.sh
-#   expect) to make such a task verifiable instead of guessing.
+#   later fm-spawn --requires on that task stays closed. That emptiness is
+#   measured against the SAME ref the matching containment proof uses - the
+#   freshly fetched remote default branch in a PR mode, the local default branch
+#   in local-only mode - so the answer never depends on ref staleness.
+#
+#   ACCEPTED CONSEQUENCE: work that landed by fast-forward or rebase is
+#   indistinguishable from a contentless worktree in git - both leave HEAD
+#   reachable from that same default branch with an empty net diff - so such a
+#   task deterministically yields NO delivered.md and its dependents stay closed.
+#   The resolutions are the settled ones: record the expected deliverable paths
+#   (bin/fm-delivery-gate.sh expect), which are then verified against that very
+#   same ref and pass, or the loud recorded override. The gate never guesses
+#   which of the two identical states it is looking at.
 #
 # Scope: kind=ship only. Scouts deliver a report, secondmates are not work
 # items - both are not-applicable to the verification arms; a scout's durable
@@ -214,15 +231,39 @@ _fm_delivery_local_paths() {
   git -C "$wt" diff --name-only "$base" HEAD -- 2>/dev/null
 }
 
-# _fm_delivery_net_work <wt>: the worktree's net changed paths against the
-# project's default branch. Empty output with a zero exit means the worktree
-# produced nothing verifiable; a non-zero exit means the question could not be
-# answered, which callers must never read as "nothing was produced".
-_fm_delivery_net_work() {
-  local wt=$1 default ref
+# _fm_delivery_fetch_default_ref <wt>: fetch the remote default branch ONCE and
+# print the remote-tracking ref that every later question about the remote must
+# be answered against - the emptiness test and Arm R's containment proof alike.
+# Appends the refusal reason and returns non-zero when the default branch cannot
+# be determined, there is no origin, or the fetch fails; that is Arm R failing
+# closed, and the caller must not fall back to an unfetched view of the ref.
+_fm_delivery_fetch_default_ref() {
+  local wt=$1 default
+  default=$(_fm_delivery_default_branch "$wt") || {
+    _fm_delivery_reason "cannot determine the remote default branch"
+    return 1
+  }
+  git -C "$wt" remote get-url origin >/dev/null 2>&1 || {
+    _fm_delivery_reason "no origin remote to verify the default branch against"
+    return 1
+  }
+  git -C "$wt" fetch --quiet origin "+refs/heads/$default:refs/remotes/origin/$default" >/dev/null 2>&1 || {
+    _fm_delivery_reason "cannot fetch origin/$default (unreachable remote counts as not delivered)"
+    return 1
+  }
+  printf '%s\n' "refs/remotes/origin/$default"
+}
+
+# _fm_delivery_local_default_ref <wt>: the local default branch ref that
+# local-only mode proves everything against. Both the emptiness test and
+# _fm_delivery_local_only_containment resolve it through here, so the two can
+# never disagree by looking at different branches. Non-zero when the default
+# branch is undeterminable or absent locally.
+_fm_delivery_local_default_ref() {
+  local wt=$1 default
   default=$(_fm_delivery_default_branch "$wt") || return 1
-  ref=$(_fm_delivery_base_ref "$wt" "$default") || return 1
-  _fm_delivery_local_paths "$wt" "$ref"
+  git -C "$wt" show-ref --verify --quiet "refs/heads/$default" || return 1
+  printf '%s\n' "refs/heads/$default"
 }
 
 # _fm_delivery_resolutions <id>: the one canonical list of what actually clears the
@@ -417,46 +458,37 @@ EOF
   return 0
 }
 
-# _fm_delivery_arm_remote_default <wt> <deliverables>: Arm R. Fetches the
-# remote default branch and verifies the worktree's content plus expected
-# deliverable paths are contained in it. Appends reasons / evidence.
+# _fm_delivery_arm_remote_default <wt> <fetched-ref> <deliverables>: Arm R.
+# Verifies the worktree's content plus expected deliverable paths are contained
+# in <fetched-ref>, which the caller obtained from
+# _fm_delivery_fetch_default_ref - this arm never fetches, so it cannot see a
+# different remote default branch than the emptiness test already saw.
+# Appends reasons / evidence.
 _fm_delivery_arm_remote_default() {
-  local wt=$1 deliverables=$2
-  local default ref default_tree merged_tree current p missing
-  default=$(_fm_delivery_default_branch "$wt") || {
-    _fm_delivery_reason "cannot determine the remote default branch"
-    return 1
-  }
-  git -C "$wt" remote get-url origin >/dev/null 2>&1 || {
-    _fm_delivery_reason "no origin remote to verify the default branch against"
-    return 1
-  }
-  git -C "$wt" fetch --quiet origin "+refs/heads/$default:refs/remotes/origin/$default" >/dev/null 2>&1 || {
-    _fm_delivery_reason "cannot fetch origin/$default (unreachable remote counts as not delivered)"
-    return 1
-  }
-  ref="refs/remotes/origin/$default"
+  local wt=$1 ref=$2 deliverables=$3
+  local shown default_tree merged_tree current p missing
+  shown=${ref#refs/remotes/}
   current=$(git -C "$wt" rev-parse --verify HEAD 2>/dev/null) || {
     _fm_delivery_reason "cannot resolve the worktree's HEAD"
     return 1
   }
   if git -C "$wt" merge-base --is-ancestor "$current" "$ref" 2>/dev/null; then
-    _fm_delivery_evidence "origin/$default contains local HEAD $current"
+    _fm_delivery_evidence "$shown contains local HEAD $current"
   else
     default_tree=$(git -C "$wt" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || {
-      _fm_delivery_reason "cannot resolve origin/$default's tree"
+      _fm_delivery_reason "cannot resolve $shown's tree"
       return 1
     }
     merged_tree=$(git -C "$wt" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || {
-      _fm_delivery_reason "cannot compare the worktree's content with origin/$default"
+      _fm_delivery_reason "cannot compare the worktree's content with $shown"
       return 1
     }
     merged_tree=$(printf '%s\n' "$merged_tree" | head -1)
     if [ "$merged_tree" != "$default_tree" ]; then
-      _fm_delivery_reason "origin/$default does not contain the worktree's content (work is not on the remote default branch)"
+      _fm_delivery_reason "$shown does not contain the worktree's content (work is not on the remote default branch)"
       return 1
     fi
-    _fm_delivery_evidence "origin/$default already contains the worktree's full content (squash-equivalent)"
+    _fm_delivery_evidence "$shown already contains the worktree's full content (squash-equivalent)"
   fi
   missing=
   while IFS= read -r p; do
@@ -466,10 +498,10 @@ _fm_delivery_arm_remote_default() {
 $deliverables
 EOF
   if [ -n "$missing" ]; then
-    _fm_delivery_reason "origin/$default is missing expected deliverable path(s):$missing"
+    _fm_delivery_reason "$shown is missing expected deliverable path(s):$missing"
     return 1
   fi
-  [ -z "$deliverables" ] || _fm_delivery_evidence "expected deliverable paths present in origin/$default"
+  [ -z "$deliverables" ] || _fm_delivery_evidence "expected deliverable paths present in $shown"
   return 0
 }
 
@@ -492,7 +524,7 @@ fm_delivery_override_active() {
 # header. Returns 0 for pass, override, or not-applicable; 1 for refused.
 fm_delivery_verify() {
   local id=$1 state=$2 data=$3
-  local meta kind mode wt branch deliverables net
+  local meta kind mode wt branch deliverables net default_ref
   _fm_delivery_reset
   meta="$state/$id.meta"
   if [ ! -f "$meta" ]; then
@@ -527,20 +559,25 @@ fm_delivery_verify() {
     _fm_delivery_reason "task worktree '${wt:-<unrecorded>}' is not inspectable - cannot verify delivery (fail closed)"
     return 1
   fi
-  # Nothing produced is not delivery: a contentless worktree has nothing for
-  # either arm to verify, so it is not-applicable (teardown may clear the
-  # debris) and NO durable evidence is written (a dependent step stays blocked).
-  if [ -z "$deliverables" ] && net=$(_fm_delivery_net_work "$wt") && [ -z "$net" ]; then
-    FM_DELIVERY_RESULT=not-applicable
-    _fm_delivery_evidence "the worktree's net diff against the default branch is empty and no expected deliverable paths are recorded - nothing was produced to deliver, so no delivery evidence is recorded"
-    _fm_delivery_evidence "if this task's work did land (fast-forward or rebase leaves the same empty diff), make it verifiable: $(_fm_delivery_resolutions "$id")"
-    return 0
+  # One fetch, one view: the emptiness question and Arm R's containment proof
+  # are both answered against this ref. A fetch failure records its reason and
+  # fails Arm R closed - it never downgrades to an unfetched view of the ref.
+  if default_ref=$(_fm_delivery_fetch_default_ref "$wt"); then
+    # Nothing produced is not delivery: a contentless worktree has nothing for
+    # either arm to verify, so it is not-applicable (teardown may clear the
+    # debris) and NO durable evidence is written (a dependent step stays blocked).
+    if [ -z "$deliverables" ] && net=$(_fm_delivery_local_paths "$wt" "$default_ref") && [ -z "$net" ]; then
+      FM_DELIVERY_RESULT=not-applicable
+      _fm_delivery_evidence "the worktree's net diff against ${default_ref#refs/remotes/} is empty and no expected deliverable paths are recorded - nothing was produced to deliver, so no delivery evidence is recorded"
+      _fm_delivery_evidence "if this task's work did land (fast-forward or rebase leaves the same empty diff), make it verifiable: $(_fm_delivery_resolutions "$id")"
+      return 0
+    fi
+    if _fm_delivery_arm_remote_default "$wt" "$default_ref" "$deliverables"; then
+      FM_DELIVERY_RESULT=pass
+      return 0
+    fi
   fi
   branch=$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-  if _fm_delivery_arm_remote_default "$wt" "$deliverables"; then
-    FM_DELIVERY_RESULT=pass
-    return 0
-  fi
   if _fm_delivery_arm_pr "$meta" "$wt" "$branch" "$deliverables"; then
     FM_DELIVERY_RESULT=pass
     return 0
@@ -561,9 +598,8 @@ fm_delivery_verify() {
 # callers of this helper treat failure as not-applicable, never refused.
 _fm_delivery_local_only_containment() {
   local wt=$1 default ref default_tree merged_tree current
-  default=$(_fm_delivery_default_branch "$wt") || return 1
-  ref="refs/heads/$default"
-  git -C "$wt" show-ref --verify --quiet "$ref" || return 1
+  ref=$(_fm_delivery_local_default_ref "$wt") || return 1
+  default=${ref#refs/heads/}
   current=$(git -C "$wt" rev-parse --verify HEAD 2>/dev/null) || return 1
   if git -C "$wt" merge-base --is-ancestor "$current" "$ref" 2>/dev/null; then
     _fm_delivery_evidence "work contained in local $default: HEAD $current"
@@ -586,16 +622,21 @@ _fm_delivery_local_only_containment() {
 # a path can exist in the local default branch for reasons that have nothing to
 # do with this task (it was already tracked, or another task put it there), so
 # checking only path existence would let recorded expectations make the gate
-# weaker than recording none. A contentless worktree is not-applicable with no
-# evidence. Everything else in that mode is owned by bin/fm-merge-local.sh and
-# teardown's existing local-only refusal.
+# weaker than recording none. A worktree with no net change against that SAME
+# local default ref is not-applicable with no evidence - which, per the header's
+# accepted consequence, is also what a fast-forward-landed branch with nothing
+# recorded looks like; recording the expected deliverable paths is the settled
+# way to make that task verifiable, and it then passes here. Everything else in
+# that mode is owned by bin/fm-merge-local.sh and teardown's existing local-only
+# refusal.
 _fm_delivery_local_only_verify() {
-  local id=$1 wt=$2 deliverables=$3 default p missing net
+  local id=$1 wt=$2 deliverables=$3 default p missing net local_ref
   if [ -n "$wt" ] && [ -d "$wt" ] && [ -z "$deliverables" ] \
-     && net=$(_fm_delivery_net_work "$wt") && [ -z "$net" ]; then
+     && local_ref=$(_fm_delivery_local_default_ref "$wt") \
+     && net=$(_fm_delivery_local_paths "$wt" "$local_ref") && [ -z "$net" ]; then
     FM_DELIVERY_RESULT=not-applicable
-    _fm_delivery_evidence "local-only task whose net diff against the default branch is empty, with no expected deliverable paths recorded - nothing was produced to deliver, so no delivery evidence is recorded"
-    _fm_delivery_evidence "if this task's work did land (a fast-forward merge leaves the same empty diff), make it verifiable: $(_fm_delivery_resolutions "$id")"
+    _fm_delivery_evidence "local-only task whose net diff against ${local_ref#refs/heads/} is empty, with no expected deliverable paths recorded - nothing was produced to deliver, so no delivery evidence is recorded"
+    _fm_delivery_evidence "if this task's work did land (a fast-forward merge into ${local_ref#refs/heads/} leaves the same empty diff), make it verifiable: $(_fm_delivery_resolutions "$id")"
     return 0
   fi
   if [ -z "$deliverables" ]; then
@@ -613,15 +654,16 @@ _fm_delivery_local_only_verify() {
     _fm_delivery_reason "task worktree '${wt:-<unrecorded>}' is not inspectable - cannot verify local-only deliverables (fail closed)"
     return 1
   fi
-  default=$(_fm_delivery_default_branch "$wt") || {
+  local_ref=$(_fm_delivery_local_default_ref "$wt") || {
     FM_DELIVERY_RESULT=refused
     _fm_delivery_reason "cannot determine the local default branch to verify deliverables against"
     return 1
   }
+  default=${local_ref#refs/heads/}
   missing=
   while IFS= read -r p; do
     [ -n "$p" ] || continue
-    git -C "$wt" cat-file -e "refs/heads/$default:$p" 2>/dev/null || missing="$missing $p"
+    git -C "$wt" cat-file -e "$local_ref:$p" 2>/dev/null || missing="$missing $p"
   done <<EOF
 $deliverables
 EOF

@@ -117,13 +117,22 @@ add_fork_with_pushed_branch() {
 # Serve PR 7 from the fake forge: view reports <state> and <head-sha>, and
 # `pr diff --name-only` prints the case's pr-files.txt - the PR's OWN file
 # list, decoupled from anything local so the tests can disagree with reality.
+# <base> is the PR's own base branch as the forge reports it (default main);
+# pass the empty string to make the baseRefName query FAIL, which is what drives
+# the gate's repo-default fallback. Args: case_dir state head [base]
 add_gh_pr() {
-  local case_dir=$1 state=$2 head=$3
+  local case_dir=$1 state=$2 head=$3 base=${4-main} base_case
+  if [ -n "$base" ]; then
+    base_case="      *\"baseRefName\"*) printf '%s\n' '$base' ; exit 0 ;;"
+  else
+    base_case="      *\"baseRefName\"*) echo 'error: field unavailable' >&2 ; exit 1 ;;"
+  fi
   cat > "$case_dir/fakebin/gh" <<SH
 #!/usr/bin/env bash
 case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
+$base_case
       *"state,headRefOid"*) printf '%s\t%s\n' '$state' '$head' ; exit 0 ;;
       *"headRefOid"*) printf '%s\n' '$head' ; exit 0 ;;
     esac
@@ -294,6 +303,114 @@ test_verify_passes_verified_pr_and_records_evidence() {
   assert_present "$case_dir/data/task-x1/delivered.md" "clean-pass: durable delivery evidence must be recorded"
   assert_grep 'feature.txt' "$case_dir/data/task-x1/delivered.md" "clean-pass: evidence must include the verified file list"
   pass "verify passes the clean case and records durable evidence"
+}
+
+# --- a stacked PR is judged against its OWN base, not the repo default ------
+
+# Push <branch> to origin with <file>=<content> committed on top of the origin
+# baseline, then make its objects available in the project without leaving a
+# remote-tracking ref behind - the gate has to fetch the base itself.
+# Args: case_dir branch file content
+add_origin_branch_without_tracking_ref() {
+  local case_dir=$1 branch=$2 file=$3 content=$4 tmp
+  tmp="$case_dir/_base"
+  git clone -q "$case_dir/origin.git" "$tmp"
+  printf '%s\n' "$content" > "$tmp/$file"
+  git -C "$tmp" add -- "$file"
+  git -C "$tmp" -c user.email=t@t -c user.name=t commit -q -m "add $file"
+  git -C "$tmp" push -q origin "HEAD:refs/heads/$branch"
+  rm -rf "$tmp"
+  git -C "$case_dir/project" fetch -q origin "$branch"
+  git -C "$case_dir/project" rev-parse FETCH_HEAD > "$case_dir/base-head"
+  git -C "$case_dir/project" update-ref -d "refs/remotes/origin/$branch" 2>/dev/null || true
+}
+
+test_verify_passes_stacked_pr_against_its_own_base() {
+  local case_dir rc head
+  case_dir=$(make_case stacked-pr)
+  write_meta "$case_dir" no-mistakes ship
+  # PR 7's base is feature-base, not main. base.txt is inherited from that base
+  # and belongs to the OTHER PR, so PR 7's own file list legitimately omits it.
+  add_origin_branch_without_tracking_ref "$case_dir" feature-base base.txt inherited
+  git -C "$case_dir/wt" reset --hard -q "$(cat "$case_dir/base-head")"
+  wt_commit_file "$case_dir" stacked.txt "the stacked change"
+  append_pr_meta_url "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf '%s\n' "stacked.txt" > "$case_dir/pr-files.txt"
+  add_gh_pr "$case_dir" OPEN "$head" feature-base
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "stacked-pr: a PR based on a feature branch must be judged against that base"
+  grep -q 'PASS' "$case_dir/stdout" || fail "stacked-pr: no PASS line"
+  assert_not_contains "$(cat "$case_dir/stderr")" 'base.txt' \
+    "stacked-pr: an inherited path must never be demanded of this PR's file list"
+  assert_present "$case_dir/data/task-x1/delivered.md" "stacked-pr: durable evidence must be recorded"
+  pass "a stacked PR passes because changed paths come from its own baseRefName"
+}
+
+test_verify_fails_closed_when_pr_base_and_repo_default_unreadable() {
+  local case_dir rc head
+  case_dir=$(make_case stacked-pr-no-base)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+  append_pr_meta_url "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  printf '%s\n' "feature.txt" > "$case_dir/pr-files.txt"
+  # The forge will not answer baseRefName, and the repo default is
+  # undeterminable too: no origin/HEAD and no local main/master to fall back to.
+  add_gh_pr "$case_dir" MERGED "$head" ""
+  git -C "$case_dir/project" checkout --detach -q
+  git -C "$case_dir/project" symbolic-ref -d refs/remotes/origin/HEAD 2>/dev/null || true
+  git -C "$case_dir/project" branch -D main -q
+  ! git -C "$case_dir/project" symbolic-ref --quiet refs/remotes/origin/HEAD >/dev/null 2>&1 \
+    || fail "stacked-pr-no-base: test setup bug, origin/HEAD still resolves a default branch"
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "stacked-pr-no-base: an unreadable base with no fallback must refuse"
+  grep -q 'cannot read PR .* base branch from the forge' "$case_dir/stderr" \
+    || fail "stacked-pr-no-base: refusal must name the unreadable base"
+  assert_absent "$case_dir/data/task-x1/delivered.md" \
+    "stacked-pr-no-base: nothing verified means no evidence"
+  pass "an unreadable PR base with no determinable repo default fails closed"
+}
+
+# --- one view of the remote: a stale local ref cannot change the verdict -----
+
+test_verify_judges_emptiness_against_the_freshly_fetched_default_ref() {
+  local case_dir rc baseline
+  case_dir=$(make_case stale-origin-ref)
+  write_meta "$case_dir" no-mistakes ship
+  baseline=$(git -C "$case_dir/project" rev-parse refs/remotes/origin/main)
+  wt_commit_file "$case_dir" feature.txt "the change"
+  # The work is fast-forwarded onto the remote default branch, then the local
+  # remote-tracking ref is rewound so it no longer shows that. Judged against
+  # the stale ref the net diff looks non-empty; judged against the ref the
+  # containment proof actually fetches it is empty. Only one of those may
+  # decide the outcome, and it must be the fetched one.
+  git -C "$case_dir/wt" push -q origin HEAD:main
+  git -C "$case_dir/project" update-ref refs/remotes/origin/main "$baseline"
+
+  set +e
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "stale-origin-ref: a contentless-looking verdict is not a refusal"
+  grep -q 'NOT APPLICABLE' "$case_dir/stdout" \
+    || fail "stale-origin-ref: the fetched ref must decide, not the stale one"
+  grep -q 'fm-delivery-gate.sh expect' "$case_dir/stdout" \
+    || fail "stale-origin-ref: the not-applicable output must name the resolutions"
+  assert_absent "$case_dir/data/task-x1/delivered.md" \
+    "stale-origin-ref: ref staleness must never decide whether evidence is recorded"
+  pass "emptiness and containment are both judged against the one freshly fetched ref"
 }
 
 # --- fail closed: unreachable remote refuses, never passes ------------------
@@ -568,25 +685,29 @@ test_empty_net_work_tears_down_without_minting_evidence() {
 # --- local-only mode with no recorded deliverables: containment is proved,
 # never assumed from teardown being reached -----------------------------------
 
-test_local_only_teardown_records_delivery_when_head_contained_in_local_main() {
-  local case_dir rc wt_head
+test_local_only_verify_records_delivery_when_local_main_contains_the_work() {
+  local case_dir rc wt_head merged_head
   case_dir=$(make_case local-only-main-contained)
   write_meta "$case_dir" local-only ship
   wt_commit_file "$case_dir" feature.txt "the change"
   wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
-  # Simulate the branch having been merged into local main (bin/fm-merge-local.sh's
-  # job): fast-forward main to HEAD. The worktree shares the project's object db
-  # and refs, so refs/heads/main is visible from $case_dir/wt too.
-  git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
+  # bin/fm-merge-local.sh landed the branch on local main as its own commit:
+  # main carries the worktree's exact tree under a different sha, so HEAD is not
+  # an ancestor and containment has to be proved by tree equality against the
+  # same local main ref the emptiness question uses. The worktree shares the
+  # project's object db and refs, so refs/heads/main is visible from wt too.
+  merged_head=$(printf 'merge %s\n' "$wt_head" \
+    | git -C "$case_dir/project" commit-tree "$wt_head^{tree}" -p refs/heads/main)
+  git -C "$case_dir/project" update-ref refs/heads/main "$merged_head"
 
   set +e
-  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  run_gate "$case_dir" verify task-x1 > "$case_dir/stdout" 2> "$case_dir/stderr"
   rc=$?
   set -e
 
-  expect_code 0 "$rc" "local-only-main-contained: teardown should succeed when HEAD is on local main"
-  ! grep -q REFUSED "$case_dir/stderr" || fail "local-only-main-contained: teardown printed a REFUSED line"
-  assert_present "$case_dir/data/task-x1/delivered.md" "local-only-main-contained: teardown must record durable delivery evidence from proven containment"
+  expect_code 0 "$rc" "local-only-main-contained: verify must pass when local main contains the work"
+  grep -q 'PASS' "$case_dir/stdout" || fail "local-only-main-contained: no PASS line"
+  assert_present "$case_dir/data/task-x1/delivered.md" "local-only-main-contained: proven containment must record durable delivery evidence"
   assert_grep 'work contained in local main' "$case_dir/data/task-x1/delivered.md" \
     "local-only-main-contained: evidence must name the observed local containment"
 
@@ -599,7 +720,78 @@ test_local_only_teardown_records_delivery_when_head_contained_in_local_main() {
   assert_not_contains "$(cat "$case_dir/spawn-stderr")" 'has not cleared the delivery gate' \
     "local-only-main-contained: a subsequent --requires must pass the gate"
   [ "$rc" -ne 0 ] || fail "local-only-main-contained: setup error - spawn unexpectedly succeeded"
-  pass "local-only teardown with HEAD contained in local main records delivery and unblocks --requires"
+  pass "local-only verify records delivery from proven local containment and unblocks --requires"
+}
+
+# The accepted consequence of judging emptiness against the same ref the
+# containment proof uses: a fast-forwarded local main is byte-identical to a
+# worktree that produced nothing, so nothing is recorded and the resolutions are
+# named. The companion test below shows the named resolution actually working.
+test_local_only_fast_forwarded_main_records_no_delivery_without_expectations() {
+  local case_dir rc wt_head
+  case_dir=$(make_case local-only-fast-forward)
+  write_meta "$case_dir" local-only ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+  wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "local-only-fast-forward: teardown should still proceed"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "local-only-fast-forward: teardown printed a REFUSED line"
+  grep -q 'nothing was produced to deliver' "$case_dir/stdout" \
+    || fail "local-only-fast-forward: teardown must say why no evidence was recorded"
+  grep -q 'fm-delivery-gate.sh expect' "$case_dir/stdout" \
+    || fail "local-only-fast-forward: the not-applicable output must name the resolutions"
+  assert_absent "$case_dir/data/task-x1/delivered.md" \
+    "local-only-fast-forward: an empty net diff against local main records nothing"
+
+  mkdir -p "$case_dir/projects"
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/project" --requires task-x1 \
+    > "$case_dir/spawn-stdout" 2> "$case_dir/spawn-stderr"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "local-only-fast-forward: a dependent spawn must still refuse"
+  grep -q 'has not cleared the delivery gate' "$case_dir/spawn-stderr" \
+    || fail "local-only-fast-forward: refusal must name the delivery gate"
+  pass "a fast-forwarded local-only branch with nothing recorded records no evidence"
+}
+
+test_local_only_fast_forwarded_main_passes_with_recorded_expectations() {
+  local case_dir rc wt_head
+  case_dir=$(make_case local-only-fast-forward-expected)
+  write_meta "$case_dir" local-only ship
+  wt_commit_file "$case_dir" feature.txt "the change"
+  wt_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  git -C "$case_dir/project" update-ref refs/heads/main "$wt_head"
+  # The named resolution: firstmate records what this task was supposed to
+  # produce, which is then verified against that very same local main ref.
+  run_gate "$case_dir" expect task-x1 feature.txt >/dev/null
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "local-only-fast-forward-expected: teardown should succeed"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "local-only-fast-forward-expected: teardown printed a REFUSED line"
+  assert_present "$case_dir/data/task-x1/delivered.md" \
+    "local-only-fast-forward-expected: recorded expectations must make the landed work verifiable"
+
+  mkdir -p "$case_dir/projects"
+  set +e
+  run_spawn "$case_dir" task-y2 "$case_dir/nonexistent-project" --requires task-x1 \
+    > "$case_dir/spawn-stdout" 2> "$case_dir/spawn-stderr"
+  rc=$?
+  set -e
+  assert_not_contains "$(cat "$case_dir/spawn-stderr")" 'has not cleared the delivery gate' \
+    "local-only-fast-forward-expected: a subsequent --requires must pass the gate"
+  [ "$rc" -ne 0 ] || fail "local-only-fast-forward-expected: setup error - spawn unexpectedly succeeded"
+  pass "recording expected deliverable paths clears a fast-forwarded local-only task"
 }
 
 test_local_only_teardown_records_no_delivery_when_fork_remote_not_contained_locally() {
@@ -682,6 +874,9 @@ test_verify_refuses_pushed_branch_without_pr
 test_verify_refuses_pr_whose_file_list_lacks_the_work
 test_verify_refuses_missing_expected_deliverable
 test_verify_passes_verified_pr_and_records_evidence
+test_verify_passes_stacked_pr_against_its_own_base
+test_verify_fails_closed_when_pr_base_and_repo_default_unreadable
+test_verify_judges_emptiness_against_the_freshly_fetched_default_ref
 test_verify_refuses_unreachable_remote
 test_verify_scout_not_applicable
 test_override_is_loud_and_recorded
@@ -694,7 +889,9 @@ test_spawn_requires_refuses_bare_scout_report
 test_scout_teardown_records_delivery_and_unblocks_requires
 test_empty_net_work_tears_down_without_minting_evidence
 test_spawn_requires_rejects_invalid_id
-test_local_only_teardown_records_delivery_when_head_contained_in_local_main
+test_local_only_verify_records_delivery_when_local_main_contains_the_work
+test_local_only_fast_forwarded_main_records_no_delivery_without_expectations
+test_local_only_fast_forwarded_main_passes_with_recorded_expectations
 test_local_only_teardown_records_no_delivery_when_fork_remote_not_contained_locally
 test_local_only_deliverable_present_but_work_not_contained_refuses
 
