@@ -468,11 +468,27 @@ launch_template() {
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
     claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+    # codex runs under a captain-approved sandboxed posture, NOT the former
+    # --dangerously-bypass-approvals-and-sandbox (which disabled codex's sandbox
+    # entirely and let a scout reach the captain's personal browser). The three
+    # flags below are the posture:
+    #   --sandbox workspace-write confines file writes and shell to the task
+    #     worktree (+ /tmp); writes outside it are denied.
+    #   --ask-for-approval never keeps an unattended crewmate/scout running and
+    #     denies (never escalates) any out-of-sandbox command instead of stalling
+    #     on an approval prompt no human is watching.
+    #   -c sandbox_workspace_write.network_access=true keeps outbound network on
+    #     so gh, clone, and fetch still work.
+    # Two residuals are KNOWN and accepted for now, closed only by an external OS
+    # sandbox (fast-follow fm-codex-external-sandbox): on codex 0.145 network is
+    # all-or-nothing (no domain allowlist), so an already-open localhost debug
+    # port stays reachable, and workspace-write still grants full-disk READ.
+    # docs/codex-sandbox-backend.md holds the empirical evidence and rationale.
     codex)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--sandbox workspace-write --ask-for-approval never -c sandbox_workspace_write.network_access=true "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--sandbox workspace-write --ask-for-approval never -c sandbox_workspace_write.network_access=true -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
     opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
