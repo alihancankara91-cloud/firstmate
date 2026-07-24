@@ -191,23 +191,28 @@ SH
   chmod +x "$fakebin/ps"
 }
 
-# make_fake_tmux <fakebin> <live-target>: display-message succeeds only for
-# the given "session:window" target - the exact primitive
-# fm_backend_target_exists uses for a tmux endpoint liveness read.
+# make_fake_tmux <fakebin> <live-target>: the target query succeeds only for
+# the given "session:window" target - list-panes is the exact strict primitive
+# fm_backend_target_exists uses for a tmux endpoint liveness read
+# (display-message kept for callers that still read pane formats).
 make_fake_tmux() {
   local fakebin=$1 live=$2
   cat > "$fakebin/tmux" <<SH
 #!/usr/bin/env bash
 set -u
 case "\${1:-}" in
-  display-message)
+  display-message|list-panes)
+    subcmd=\${1:-}
     target=""
     prev=""
     for a in "\$@"; do
       [ "\$prev" = "-t" ] && target="\$a"
       prev="\$a"
     done
-    [ "\$target" = "$live" ] && { printf '%%1\n'; exit 0; }
+    if [ "\$target" = "$live" ]; then
+      [ "\$subcmd" = list-panes ] || printf '%%1\n'
+      exit 0
+    fi
     exit 1
     ;;
 esac

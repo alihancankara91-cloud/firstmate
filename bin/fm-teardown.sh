@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Tear down a finished task: return the treehouse worktree, release the Orca
-# worktree, or retire a secondmate home; kill the recorded runtime endpoint,
+# worktree, or retire a secondmate home; kill the recorded runtime endpoint
+# and VERIFY it is gone (a surviving endpoint is retried once, then reported
+# loudly, so finished agents cannot silently accumulate as dead panes);
 # clear volatile state, refresh/prune the project's clone for PR-based ship
 # tasks, then print a backlog-refresh reminder for ship and scout teardowns
 # (a secondmate teardown prints none, since secondmates are not backlog items).
@@ -200,6 +202,26 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   T_ORCA=$(meta_value "$META" terminal)
   [ -z "$T_ORCA" ] || T=$T_ORCA
 fi
+
+# Kill a recorded endpoint and VERIFY it is actually gone. fm_backend_kill is
+# best-effort by contract, so a failed kill used to be invisible - which is
+# exactly how finished agents accumulated as dead panes (2026-07-23 hygiene
+# lesson). Retries once, then reports the leftover endpoint loudly; teardown
+# still completes, because the safety checks have already passed by the time
+# this runs and stranding task state over a display-surface failure would be
+# worse than one visible leftover pane.
+kill_endpoint_verified() {  # <backend> <target> <zellij-tab-id> <label>
+  local backend=$1 target=$2 tab=$3 label=$4
+  [ -n "$target" ] || return 0
+  fm_backend_kill "$backend" "$target" "$tab" "$label" 2>/dev/null || true
+  fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null || return 0
+  sleep 1
+  fm_backend_kill "$backend" "$target" "$tab" "$label" 2>/dev/null || true
+  if fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null; then
+    echo "warning: endpoint $target for $label survived teardown removal; close it manually so dead panes do not accumulate" >&2
+  fi
+  return 0
+}
 
 remove_grok_turnend_auth() {
   local state_dir=$1 id=$2 token hooks_dir
@@ -991,7 +1013,7 @@ cleanup_firstmate_home_children() {
         # cleanup must verify child tabs as that child home, not the parent.
         ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) 2>/dev/null || true
       else
-        fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" 2>/dev/null || true
+        kill_endpoint_verified "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id"
       fi
     fi
     if [ "$child_kind" = secondmate ]; then
@@ -1158,7 +1180,7 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
     fi
     rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" "$WT/.fm-grok-turnend"
   fi
-  [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+  [ -z "$T_ORCA" ] || kill_endpoint_verified "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID"
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
 elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
@@ -1229,7 +1251,7 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
     echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
   fi
 elif [ "$BACKEND" != orca ]; then
-  fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
+  kill_endpoint_verified "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID"
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then

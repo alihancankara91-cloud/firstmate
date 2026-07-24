@@ -3,15 +3,35 @@
 //
 // The shared Lexer, program splitter, and command-position resolver remain owned
 // by fm-arm-command-policy.mjs. This policy only identifies executed firstmate
-// fleet scripts and divides them into recovery commands (wake drain, watcher
-// arm, and fail-closed teardown) versus every other bin/fm-*.sh command. Unparseable or opaque dynamic
+// fleet scripts and divides them into always-allowed commands versus every
+// other bin/fm-*.sh command. Unparseable or opaque dynamic
 // commands fail open so this gate can never become a blanket shell block.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Lexer, commandPosition, splitProgram } from "./fm-arm-command-policy.mjs";
 
-const RECOVERY_SCRIPTS = new Set(["fm-wake-drain.sh", "fm-watch-arm.sh", "fm-teardown.sh"]);
+// Always-allowed fleet scripts while the watcher has lapsed: the recovery
+// commands (wake drain, watcher arm, and independently fail-closed teardown)
+// plus fm-send.sh, firstmate's authenticated steer channel. fm-send must never
+// require a bypass here: it is itself fail-closed (explicit FM_HOME, refuses
+// unresolved targets, verified submit), it mutates no fleet state, it already
+// self-warns about lapsed supervision through fm-guard, and blocking it forces
+// steers onto raw backend paths that carry no firstmate identity marker -
+// which a secondmate correctly refuses for consequential instructions
+// (2026-07-23 incident: 68 legal notices held for an hour on unattributable
+// instructions delivered around this gate).
+// fm-agent-exit.sh is allowed for the same reason: rotating a wedged agent is
+// itself a lapse-window recovery action, and blocking the safe owner (which
+// drains queued requests and interrupts before exiting) would push recovery
+// onto raw backend kill commands this gate cannot see.
+const ALLOWED_SCRIPTS = new Set([
+  "fm-wake-drain.sh",
+  "fm-watch-arm.sh",
+  "fm-teardown.sh",
+  "fm-send.sh",
+  "fm-agent-exit.sh",
+]);
 
 function parseArguments(argv) {
   const result = { command: "", root: "" };
@@ -122,7 +142,7 @@ function collectExecutedFleetScripts(command, root, depth = 0) {
 
 export function classifyContinuityCommand(command, root) {
   const scripts = collectExecutedFleetScripts(command, root);
-  const blocked = scripts.find(({ name, unsafeTeardown }) => !RECOVERY_SCRIPTS.has(name) || unsafeTeardown);
+  const blocked = scripts.find(({ name, unsafeTeardown }) => !ALLOWED_SCRIPTS.has(name) || unsafeTeardown);
   if (!blocked) return { decision: "allow", script: "" };
   const code = blocked.unsafeTeardown ? "unsafe-teardown" : "other-fleet";
   return { decision: "deny", script: blocked.name, code };

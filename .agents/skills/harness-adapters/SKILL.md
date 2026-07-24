@@ -48,6 +48,9 @@ When verifying a new adapter, record its env marker and command name in `bin/fm-
 For stuck recovery, the target window's harness is recorded as `harness=` in `state/<id>.meta`.
 Use that value for interrupt, exit, resume, and skill-invocation facts.
 
+To actually shut a wedged or retiring agent down, run `bin/fm-agent-exit.sh <task-id>` instead of hand-typing the sequence: it is the one mechanical owner of the interrupt-then-exit ordering (a wedged agent queues a typed exit command behind work it cannot reach; the interrupt is what lands), of queued-request invalidation before rotation, and of verified endpoint removal.
+That script encodes each harness's interrupt key and exit command from the tables below; when a harness's interrupt or exit fact changes here, update the table in `bin/fm-agent-exit.sh` in the same change.
+
 ## Primary turn-end guard
 
 Every verified primary harness has an empirically validated hook path for the "no turn ends blind" guard.
