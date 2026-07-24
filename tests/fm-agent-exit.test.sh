@@ -33,6 +33,13 @@ AGENT_EXIT="$ROOT/bin/fm-agent-exit.sh"
 REAL_TMUX=$(command -v tmux)
 SOCKET="fm-agent-exit-$$"
 TMP_ROOT=$(fm_test_tmproot fm-agent-exit-tests)
+# fm_test_tmproot ran in the $(...) subshell above, so its registration of
+# TMP_ROOT for cleanup was discarded with that subshell. Re-register it in this
+# shell so cleanup_tmux's fm_test_cleanup actually removes the temp root (else
+# it leaks) and its cleanup loop returns success instead of leaving the EXIT
+# trap with the last failed empty-array test as $? under the set -e in effect
+# at exit.
+FM_TEST_CLEANUP_DIRS+=("$TMP_ROOT")
 
 cleanup_tmux() {
   "$REAL_TMUX" -L "$SOCKET" kill-server >/dev/null 2>&1 || true

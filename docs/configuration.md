@@ -431,6 +431,9 @@ FM_SEND_RETRIES=3       # fm-send Enter-retry attempts after typing the line onc
 FM_SEND_SLEEP=0.4       # seconds between fm-send submit checks
 FM_SEND_SETTLE=1        # seconds fm-send waits after a successful text submit; 0 disables
 FM_PENDING_REPLY_GRACE_SECS=120   # seconds after marked-request delivery before a completed turn without a correlated parent report is eligible for its one recovery repost
+FM_AGENT_EXIT_INTERRUPT_SETTLE=2   # seconds fm-agent-exit waits after the interrupt before sending the harness exit command
+FM_AGENT_EXIT_WAIT=20   # bounded seconds fm-agent-exit waits for the agent process to end after the exit command
+FM_AGENT_EXIT_POLL=1    # seconds between fm-agent-exit liveness polls while waiting for the agent to exit
 # sub-supervisor (bin/fm-supervise-daemon.sh); presence-gated via /afk
 FM_SUPERVISOR_BACKEND=             # optional supervisor pane backend override; tmux/herdr only, otherwise detects $TMUX_PANE then HERDR_ENV/HERDR_PANE_ID before tmux fallback
 FM_SUPERVISOR_TARGET=              # optional supervisor pane target override; tmux target or herdr <session>:<pane-id>, otherwise auto-detected

@@ -19,10 +19,11 @@ After the configured retry bound is exhausted, it delivers the original wake wit
 This is deliberate Option B ordering: the fleet is protected before the model handles the wake whenever restoration succeeds, but the model is never left blind when it does not.
 
 Claude retains its native tracked background-task completion path.
-Its new PreToolUse continuity gate allows wake drain, arm recovery, the authenticated steer channel `bin/fm-send.sh`, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
+Its new PreToolUse continuity gate allows wake drain, arm recovery, the authenticated steer channel `bin/fm-send.sh`, safe agent shutdown via `bin/fm-agent-exit.sh`, and independently fail-closed teardown, but refuses other fleet commands while tasks are in flight and no identity-matched live watcher holds the home lock.
 Allowing an ordinary literal teardown prevents a terminal wake from creating a recovery circle: forced or dynamically constructed teardown remains blocked, ordinary teardown itself still refuses dirty, unlanded, incomplete-scout, and unresolved-decision cases, and the turn-end guard continues to require supervision for any tasks left in flight.
 Allowing `fm-send` closes the 2026-07-23 gap: the watcher lapses between every wake by design, so a gate that blocked the authenticated send path during wake handling forced steers onto raw backend delivery with no firstmate identity marker, and a secondmate correctly refused consequential instructions delivered that way.
 `fm-send` needs no continuity precondition because it is itself fail-closed on target resolution, mutates no fleet state, and already prints its own supervision warning through `bin/fm-guard.sh` when the watcher has lapsed.
+Allowing `fm-agent-exit` follows the same logic: rotating a wedged agent is itself a lapse-window recovery action, and blocking its safe owner - which drains queued marked requests and interrupts before exiting - would push recovery onto raw backend kill commands the gate cannot see.
 Codex retains its bounded foreground checkpoint protocol.
 Grok retains its tracked background-task notification protocol.
 No adapter starts a replacement with shell `&`.

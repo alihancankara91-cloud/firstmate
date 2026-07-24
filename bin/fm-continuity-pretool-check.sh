@@ -2,10 +2,11 @@
 # Claude primary watcher-continuity PreToolUse gate.
 #
 # This hook is deliberately narrow. It denies only an executed bin/fm-*.sh fleet
-# command other than bin/fm-wake-drain.sh, bin/fm-watch-arm.sh, the
-# independently fail-closed bin/fm-teardown.sh, or the authenticated steer
-# channel bin/fm-send.sh, and only when the active primary home has task
-# metadata in flight but no identity-matched live watcher holds the home lock.
+# command other than bin/fm-wake-drain.sh, bin/fm-watch-arm.sh,
+# bin/fm-agent-exit.sh, the independently fail-closed bin/fm-teardown.sh, or the
+# authenticated steer channel bin/fm-send.sh, and only when the active primary
+# home has task metadata in flight but no identity-matched live watcher holds the
+# home lock.
 # Ordinary shell commands, recovery commands, steers, healthy supervision,
 # fleet-idle homes, and child worktrees are always allowed. fm-send is exempt
 # by design, not convenience: the watcher lapses between every wake by design,
