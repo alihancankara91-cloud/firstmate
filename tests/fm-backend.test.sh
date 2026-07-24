@@ -959,8 +959,14 @@ test_teardown_conformance_old_vs_new() {
   # list-panes existence probe after the kill - a deliberate post-P1 behavior
   # change (2026-07-23 panel-residue hygiene), so probe lines are excluded
   # from the byte-parity check while everything else must remain identical.
+  # The probe is excluded from BOTH logs, not just the new one: once that
+  # hygiene change reached the default branch, BASE_REF (the merge-base the old
+  # bin is extracted from) carries kill_endpoint_verified too, so the OLD run
+  # emits the same probe line. Stripping it from both keeps this conformance
+  # check correct whether or not the baseline predates the probe.
+  grep -v $'^tmux\x1flist-panes' "$log_old" > "$TMP_ROOT/teardown-old-normalized.log" || true
   grep -v $'^tmux\x1flist-panes' "$log_new" > "$TMP_ROOT/teardown-new-normalized.log" || true
-  diff -u "$log_old" "$TMP_ROOT/teardown-new-normalized.log" > "$TMP_ROOT/teardown-diff.txt" 2>&1 \
+  diff -u "$TMP_ROOT/teardown-old-normalized.log" "$TMP_ROOT/teardown-new-normalized.log" > "$TMP_ROOT/teardown-diff.txt" 2>&1 \
     || fail "fm-teardown.sh: tmux+treehouse command log differs old vs new"$'\n'"$(cat "$TMP_ROOT/teardown-diff.txt")"
   assert_contains "$(cat "$log_new")" "tmux"$'\x1f''list-panes' \
     "teardown did not verify the endpoint after killing it"
