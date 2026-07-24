@@ -103,6 +103,11 @@
 #   $vars and silently breaks ad-hoc `for ... in $pairs` loops).
 #   Launch templates live in launch_template() below; placeholders replaced before launch:
 #     __BRIEF__    absolute path to data/<task-id>/brief.md
+#     __CODEXCAGE__ absolute path to the external Codex cage wrapper
+#     __WORKTREE__ absolute path to the isolated task worktree
+#     __TASKDATA__ absolute path to the task's permitted Firstmate data directory
+#     __STATUS__ absolute path to the task's append-only status file
+#     __FMHOME__ absolute path to the Firstmate home exported inside the cage
 #     __TURNEND__  absolute path to state/<task-id>.turn-ended (for harnesses whose
 #                  turn-end signal rides the launch command, e.g. codex -c notify=[...])
 #     __PIEXT__    absolute path to state/<task-id>.pi-ext.ts (pi turn-end extension,
@@ -468,27 +473,16 @@ launch_template() {
     # var is the correct control. The dim-aware composer reader in fm-tmux-lib.sh is
     # the defense-in-depth backstop for any pane this flag cannot reach.
     claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
-    # codex runs under a captain-approved sandboxed posture, NOT the former
-    # --dangerously-bypass-approvals-and-sandbox (which disabled codex's sandbox
-    # entirely and let a scout reach the captain's personal browser). The three
-    # flags below are the posture:
-    #   --sandbox workspace-write confines file writes and shell to the task
-    #     worktree (+ /tmp); writes outside it are denied.
-    #   --ask-for-approval never keeps an unattended crewmate/scout running and
-    #     denies (never escalates) any out-of-sandbox command instead of stalling
-    #     on an approval prompt no human is watching.
-    #   -c sandbox_workspace_write.network_access=true keeps outbound network on
-    #     so gh, clone, and fetch still work.
-    # Two residuals are KNOWN and accepted for now, closed only by an external OS
-    # sandbox (fast-follow fm-codex-external-sandbox): on codex 0.145 network is
-    # all-or-nothing (no domain allowlist), so an already-open localhost debug
-    # port stays reachable, and workspace-write still grants full-disk READ.
-    # docs/codex-sandbox-backend.md holds the empirical evidence and rationale.
+    # Codex bypasses its internal approval sandbox only inside Firstmate's
+    # fail-closed external macOS cage.
+    # The cage is a second layer, and the permanent rule that agents never touch
+    # the captain's personal browser remains independent of it.
+    # docs/codex-sandbox-backend.md owns the rationale and empirical evidence.
     codex)
       if [ "$kind" = secondmate ]; then
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--sandbox workspace-write --ask-for-approval never -c sandbox_workspace_write.network_access=true "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' '__CODEXCAGE__ --worktree __WORKTREE__ --task-data-dir __TASKDATA__ --status-path __STATUS__ --fm-home __FMHOME__ -- codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--sandbox workspace-write --ask-for-approval never -c sandbox_workspace_write.network_access=true -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+        printf '%s' '__CODEXCAGE__ --worktree __WORKTREE__ --task-data-dir __TASKDATA__ --status-path __STATUS__ --notify-path __TURNEND__ --fm-home __FMHOME__ -- codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       fi
       ;;
     opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
@@ -1317,11 +1311,21 @@ META_WINDOW=$T
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
+sq_codexcage=$(shell_quote "$FM_ROOT/bin/fm-codex-cage.sh")
+sq_worktree=$(shell_quote "$WT")
+sq_status=$(shell_quote "$STATE_REAL/$ID.status")
 sq_turnend=$(shell_quote "$TURNEND")
 sq_piext=$(shell_quote "$STATE/$ID.pi-ext.ts")
 sq_piturnend=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-turnend-guard.ts")
 sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
+if [ "$KIND" = secondmate ]; then
+  sq_taskdata=$(shell_quote "$PROJ_ABS/data")
+  sq_fmhome=$(shell_quote "$PROJ_ABS")
+else
+  sq_taskdata=$(shell_quote "$DATA/$ID")
+  sq_fmhome=$(shell_quote "$FM_HOME")
+fi
 PIBRIEFENV=
 [ "$HARNESS" != pi ] || PIBRIEFENV="FM_FIRSTMATE_PI_LAUNCH_BRIEF=$sq_brief"
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
@@ -1329,6 +1333,11 @@ EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}
+LAUNCH=${LAUNCH//__CODEXCAGE__/$sq_codexcage}
+LAUNCH=${LAUNCH//__WORKTREE__/$sq_worktree}
+LAUNCH=${LAUNCH//__TASKDATA__/$sq_taskdata}
+LAUNCH=${LAUNCH//__STATUS__/$sq_status}
+LAUNCH=${LAUNCH//__FMHOME__/$sq_fmhome}
 LAUNCH=${LAUNCH//__TURNEND__/$sq_turnend}
 LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}

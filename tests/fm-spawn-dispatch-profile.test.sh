@@ -169,8 +169,12 @@ test_active_dispatch_profile_allows_explicit_harness() {
   assert_contains "$out" "spawned $id harness=codex" "spawn did not report explicit codex harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --sandbox workspace-write --ask-for-approval never -c sandbox_workspace_write.network_access=true" \
+  assert_contains "$launch" "fm-codex-cage.sh' --worktree" \
+    "explicit harness launch did not use the external cage"
+  assert_contains "$launch" "-- codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
     "explicit harness launch did not thread model and effort"
+  assert_not_contains "$launch" "--sandbox workspace-write" \
+    "explicit harness launch retained the interim workspace-write posture"
   pass "active crew-dispatch profile allows an explicit resolved harness"
 }
 
@@ -235,10 +239,12 @@ test_codex_threads_model_and_effort() {
   expect_code 0 "$status" "codex spawn with profile flags should succeed"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 high
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --sandbox workspace-write --ask-for-approval never -c sandbox_workspace_write.network_access=true" \
+  assert_contains "$launch" "fm-codex-cage.sh' --worktree" \
+    "codex launch did not use the external cage"
+  assert_contains "$launch" "-- codex --model 'gpt-5' -c 'model_reasoning_effort=\"high\"' --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not thread model and reasoning effort config"
-  assert_not_contains "$launch" "dangerously-bypass-approvals-and-sandbox" \
-    "codex launch must never disable the sandbox (security regression)"
+  assert_not_contains "$launch" "--sandbox workspace-write" \
+    "codex launch retained the interim workspace-write posture"
   pass "codex receives --model and model_reasoning_effort profile flags"
 }
 
@@ -253,7 +259,7 @@ test_codex_omits_invalid_max_effort() {
   expect_code 0 "$status" "codex spawn with unsupported max effort should omit the effort flag"
   assert_meta_profile "$HOME_DIR/state/$id.meta" codex gpt-5 max
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "codex --model 'gpt-5' --sandbox workspace-write --ask-for-approval never -c sandbox_workspace_write.network_access=true" \
+  assert_contains "$launch" "-- codex --model 'gpt-5' --dangerously-bypass-approvals-and-sandbox" \
     "codex launch did not preserve the model flag when max effort was omitted"
   assert_not_contains "$launch" "model_reasoning_effort" "codex launch must omit unsupported max reasoning effort"
   pass "codex omits unsupported max effort instead of passing a bad config value"

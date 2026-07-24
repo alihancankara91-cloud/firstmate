@@ -1,0 +1,104 @@
+;; fm-codex-cage.sb - macOS Seatbelt policy for Firstmate-launched Codex agents.
+;;
+;; bin/fm-codex-cage.sh owns parameter validation and the sanitized environment.
+;; This policy owns the kernel-enforced file, process, IPC, and network boundary.
+(version 1)
+
+(deny default)
+(import "system.sb")
+
+(define worktree (param "WORKTREE"))
+(define git-dir (param "GIT_DIR"))
+(define git-common-dir (param "GIT_COMMON_DIR"))
+(define task-data-dir (param "TASK_DATA_DIR"))
+(define status-path (param "STATUS_PATH"))
+(define notify-path (param "NOTIFY_PATH"))
+(define cage-tmp (param "CAGE_TMP"))
+(define codex-home (param "CODEX_HOME"))
+(define tls-trust-dir (param "TLS_TRUST_DIR"))
+(define codex-native (param "CODEX_NATIVE"))
+(define codex-install-root (param "CODEX_INSTALL_ROOT"))
+(define local-bin-dir (param "LOCAL_BIN_DIR"))
+(define npx-root (param "NPX_ROOT"))
+(define no-mistakes-bin-dir (param "NO_MISTAKES_BIN_DIR"))
+(define no-mistakes-socket (param "NO_MISTAKES_SOCKET"))
+
+;; Child shells need ordinary process creation, but never an unsandboxed exec.
+(allow process*)
+(allow signal (target self))
+
+;; Metadata permits path traversal without granting directory contents or data.
+(allow file-read-metadata)
+
+;; System runtimes, package-manager tools, Codex itself, and the task's Git
+;; metadata are readable.
+(allow file-read* file-test-existence file-map-executable
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/usr")
+  (subpath "/System")
+  (subpath "/Library/Apple")
+  (subpath "/Library/Developer/CommandLineTools")
+  (subpath "/opt/homebrew")
+  (subpath "/usr/local")
+  ;; This directory contains only world-readable public CA roots and OpenSSL
+  ;; configuration needed by TLS clients inside the cage.
+  (subpath tls-trust-dir)
+  (subpath codex-install-root)
+  (subpath local-bin-dir)
+  (subpath npx-root)
+  (subpath no-mistakes-bin-dir)
+  (subpath worktree)
+  (subpath git-dir)
+  (subpath git-common-dir)
+  (subpath task-data-dir)
+  (literal status-path)
+  (literal notify-path)
+  (subpath cage-tmp))
+
+;; Only the signed Codex native process may load its user configuration and
+;; authentication store.
+;; Model-launched shells inherit the cage but have a different process path, so
+;; they cannot read these files.
+(with-filter (process-path codex-native)
+  (allow file-read* file-test-existence
+    (subpath codex-home))
+  (allow file-write*
+    (subpath codex-home)))
+
+;; Writes are limited to the task and exact Firstmate lifecycle surfaces.
+(allow file-write*
+  (subpath worktree)
+  (subpath git-dir)
+  (subpath git-common-dir)
+  (subpath task-data-dir)
+  (literal status-path)
+  (literal notify-path)
+  (subpath cage-tmp))
+
+;; Internet access remains available for Codex, Git, GitHub, and package
+;; downloads.
+;; Every loopback TCP destination remains denied, including an existing Chrome
+;; remote-debugging endpoint.
+(allow network-outbound
+  (remote ip)
+  (literal "/private/var/run/mDNSResponder")
+  (literal no-mistakes-socket))
+(deny network-outbound
+  (remote ip "localhost:*"))
+
+;; Prevent UI automation and browser launches even when a system helper is
+;; executable.
+(deny appleevent-send)
+(deny process-exec
+  (subpath "/Applications")
+  (subpath "/System/Applications"))
+(deny mach-lookup
+  (global-name-prefix "com.apple.coreservices.launchservices")
+  (global-name-prefix "com.apple.lsd"))
+
+;; Keep every caged process away from login, account, and credential brokers.
+(deny mach-lookup
+  (global-name-prefix "com.apple.securityd")
+  (global-name-prefix "com.apple.secd")
+  (global-name-prefix "com.apple.akd"))

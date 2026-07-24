@@ -599,10 +599,12 @@ test_spawn_explicit_harness_does_not_inherit_secondmate_harness_tokens() {
   [ "$(meta_field "$meta" model)" = default ] || fail "explicit-harness-no-tokens: meta model should stay default"
   [ "$(meta_field "$meta" effort)" = default ] || fail "explicit-harness-no-tokens: meta effort should stay default"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "codex --sandbox workspace-write --ask-for-approval never -c sandbox_workspace_write.network_access=true" \
-    "explicit-harness-no-tokens: launch did not use codex"
-  assert_not_contains "$launch" "dangerously-bypass-approvals-and-sandbox" \
-    "explicit-harness-no-tokens: secondmate codex launch must never disable the sandbox"
+  assert_contains "$launch" "fm-codex-cage.sh' --worktree" \
+    "explicit-harness-no-tokens: secondmate codex launch did not use the external cage"
+  assert_contains "$launch" "-- codex --dangerously-bypass-approvals-and-sandbox" \
+    "explicit-harness-no-tokens: launch did not use bypass-mode codex inside the cage"
+  assert_not_contains "$launch" "--sandbox workspace-write" \
+    "explicit-harness-no-tokens: launch retained the interim workspace-write posture"
   assert_not_contains "$launch" "--model" "explicit-harness-no-tokens: launch must not carry a --model flag"
   assert_not_contains "$launch" "model_reasoning_effort" \
     "explicit-harness-no-tokens: launch must not carry a codex effort flag"
