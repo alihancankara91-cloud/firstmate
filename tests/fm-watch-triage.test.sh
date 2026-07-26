@@ -128,6 +128,14 @@ test_classifier_primitives() {
   [ "$(last_status_line "$state/x.status")" = "done: b" ] || fail "last_status_line did not return the last non-blank line"
   status_is_captain_relevant "done: b" || fail "done: not recognized as captain-relevant"
   status_is_captain_relevant "needs-decision [key=q1]: b" || fail "keyed needs-decision not recognized as captain-relevant"
+  status_escalation_is_structured "needs-decision [key=q1]: need=choose the API shape | options=A; B | recommend=A because it is stable" \
+    || fail "structured needs-decision line was not machine-recognized"
+  status_escalation_is_structured "blocked [key=auth]: need=missing login | action=sign in with gh | recommend=sign in once and retry" \
+    || fail "structured blocked line was not machine-recognized"
+  status_escalation_is_structured "needs-decision: choose A or B" \
+    && fail "legacy decision line was mistaken for the new structured format"
+  status_escalation_is_structured "blocked [key=auth]: need=missing login | recommend=retry" \
+    && fail "structured blocker without required action was accepted"
   status_is_captain_relevant "working: b" && fail "working: wrongly recognized as captain-relevant"
   # Incident regression: free-text "merged" inside a nonterminal working: line must
   # not become captain-relevant (AFK false-terminal path).
@@ -316,6 +324,7 @@ test_provably_working_signal_absorbed() {
   fi
   [ ! -s "$out" ] || fail "provably-working signal printed a wake reason: $(cat "$out")"
   [ ! -s "$state/.wake-queue" ] || fail "provably-working signal enqueued a durable wake record"
+  grep -F "fm-escalation-v1:" "$out" >/dev/null && fail "ordinary working status became a captain escalation relay"
   [ -s "$state/.seen-task_status" ] || fail "provably-working signal did not advance its .seen-* suppressor"
   [ -e "$state/.last-watcher-beat" ] || fail "watcher beacon was not touched while absorbing"
   reap "$pid"
@@ -357,6 +366,7 @@ test_turn_ended_not_working_surfaced() {
   pid=$!
   wait_for_exit "$pid" 40 || fail "watcher did not surface a turn-end whose crew is not provably working"
   grep -F "signal: $state/task.turn-ended" "$out" >/dev/null || fail "watcher did not print the surfaced turn-end signal"
+  grep -F "fm-escalation-v1:" "$out" >/dev/null && fail "ordinary turn-end became a captain escalation relay"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the surfaced turn-end failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$state/task.turn-ended" >/dev/null || fail "surfaced turn-end was not queued"
   pass "a bare turn-end whose crew is not provably working is surfaced (the swallowed-finish fix)"
@@ -385,7 +395,7 @@ test_working_note_not_working_surfaced() {
 # --- actionable wakes are surfaced (queue + exit) ---------------------------
 
 test_actionable_signal_surfaced() {
-  local dir state fakebin out drain_out status_file pid
+  local dir state fakebin out drain_out status_file pid encoded
   dir=$(make_case actionable-signal); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; drain_out="$dir/drain.out"
   status_file="$state/task.status"
@@ -394,10 +404,32 @@ test_actionable_signal_surfaced() {
   pid=$!
   wait_for_exit "$pid" 40 || fail "watcher did not exit for an actionable needs-decision signal"
   grep -F "signal: $status_file" "$out" >/dev/null || fail "watcher did not print the actionable signal reason"
+  encoded=$(printf '%s' 'pick A or B' | base64 | tr -d '\r\n')
+  grep -F "fm-escalation-v1:task:default:needs-decision:$encoded" "$out" >/dev/null \
+    || fail "legacy decision signal did not carry its exact content"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the actionable signal failed"
-  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "$status_file" >/dev/null || fail "actionable signal was not queued"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "fm-escalation-v1:task:default:needs-decision:$encoded" >/dev/null \
+    || fail "legacy decision queue row lost its exact content"
   [ -s "$state/.hb-surfaced-task" ] || fail "actionable signal did not record the surfaced marker"
   pass "captain-relevant signal is surfaced (queue + exit) and marked surfaced"
+}
+
+test_structured_blocker_signal_carries_exact_content() {
+  local dir state fakebin out drain_out status_file pid note encoded
+  dir=$(make_case structured-blocker-signal); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"; status_file="$state/task.status"
+  note='need=CI cannot authenticate | action=refresh the GitHub login | recommend=refresh once and retry the same run'
+  printf 'blocked [key=ci-auth]: %s\n' "$note" > "$status_file"
+  watch_bg "$state" "$fakebin" "$out"
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "watcher did not exit for a structured blocker signal"
+  encoded=$(printf '%s' "$note" | base64 | tr -d '\r\n')
+  grep -F "fm-escalation-v1:task:ci-auth:blocked:$encoded" "$out" >/dev/null \
+    || fail "structured blocker signal did not carry its exact content"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after structured blocker failed"
+  grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "fm-escalation-v1:task:ci-auth:blocked:$encoded" >/dev/null \
+    || fail "structured blocker queue row lost its exact content"
+  pass "structured blocker signals carry exact need, action, and recommendation content"
 }
 
 test_terminal_stale_surfaced() {
@@ -1174,11 +1206,36 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
   pid=$!
   wait_for_exit "$pid" 40 || fail "heartbeat backstop did not surface an unsurfaced captain-relevant status"
   grep -Fx "heartbeat" "$out" >/dev/null || fail "backstop did not exit with a heartbeat wake"
+  grep -F "fm-escalation-v1:" "$out" >/dev/null && fail "ordinary done heartbeat became a captain escalation relay"
   [ "$(cat "$state/.hb-surfaced-miss" 2>/dev/null || true)" = "done: PR https://example.test/pr/5" ] \
     || fail "backstop did not record the status as surfaced (would re-fire next heartbeat)"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the backstop heartbeat failed"
   grep "$(printf '\theartbeat\t')" "$drain_out" >/dev/null || fail "backstop heartbeat was not queued"
   pass "heartbeat backstop fail-safe surfaces a captain-relevant status the per-wake path missed"
+}
+
+test_heartbeat_backstop_promotes_missed_escalation_to_signal() {
+  local dir state fakebin out drain_out sig pid note encoded
+  dir=$(make_case heartbeat-escalation); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; drain_out="$dir/drain.out"
+  note='need=choose fallback | options=A; B | recommend=A because it is safer'
+  printf 'needs-decision [key=fallback]: %s\n' "$note" > "$state/miss.status"
+  sig=$(seen_sig "$state/miss.status"); printf '%s' "$sig" > "$state/.seen-miss_status"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "heartbeat backstop did not surface a missed decision"
+  encoded=$(printf '%s' "$note" | base64 | tr -d '\r\n')
+  grep -F "signal: $state/miss.status" "$out" >/dev/null \
+    || fail "missed escalation stayed an opaque heartbeat instead of a status signal"
+  grep -F "fm-escalation-v1:miss:fallback:needs-decision:$encoded" "$out" >/dev/null \
+    || fail "heartbeat-promoted escalation lost its exact content"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after promoted escalation failed"
+  grep "$(printf '\tsignal\tmiss.status\t')" "$drain_out" >/dev/null \
+    || fail "heartbeat-promoted escalation was not queued as a signal"
+  grep "$(printf '\theartbeat\t')" "$drain_out" >/dev/null \
+    && fail "heartbeat-promoted escalation also queued an ordinary heartbeat"
+  pass "heartbeat backstop promotes missed decisions to exact-content signal relays"
 }
 
 # --- beacon stays fresh while absorbing -------------------------------------
@@ -1283,6 +1340,7 @@ test_turn_ended_provably_working_absorbed
 test_turn_ended_not_working_surfaced
 test_working_note_not_working_surfaced
 test_actionable_signal_surfaced
+test_structured_blocker_signal_carries_exact_content
 test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
@@ -1301,6 +1359,7 @@ test_nonterminal_stale_repairs_missing_or_corrupt_timer
 test_triage_log_size_cap_accepts_spaced_wc_counts
 test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
+test_heartbeat_backstop_promotes_missed_escalation_to_signal
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale

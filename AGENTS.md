@@ -445,7 +445,7 @@ If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if t
 The generated Herdr contract must use a named non-`default` isolated lab and its guarded helper for every lifecycle action.
 
 Load `secondmate-provisioning` before creating or using a charter brief and preserve its idle-by-default and marked-return-channel contracts.
-Status appends are sparse supervisor-actionable events, not routine progress; `bin/fm-classify-lib.sh` owns keyed open and resolved semantics.
+Status appends are sparse supervisor-actionable events, not routine progress; `bin/fm-classify-lib.sh` owns keyed open and resolved semantics plus the structured decision and blocker line format emitted into new briefs.
 The scaffold is a safety contract, not a suggestion.
 
 ## 12. Self-update

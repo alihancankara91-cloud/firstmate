@@ -94,6 +94,7 @@ install_guard_scripts() {
   cp "$ROOT/bin/fm-primary-scope-lib.sh" "$dir/bin/fm-primary-scope-lib.sh"
   cp "$ROOT/bin/fm-supervision-lib.sh" "$dir/bin/fm-supervision-lib.sh"
   cp "$ROOT/bin/fm-wake-lib.sh" "$dir/bin/fm-wake-lib.sh"
+  cp "$ROOT/bin/fm-classify-lib.sh" "$dir/bin/fm-classify-lib.sh"
   mkdir -p "$dir/docs"
   cp -R "$ROOT/docs/supervision-protocols" "$dir/docs/supervision-protocols"
   chmod +x "$dir/bin/fm-turnend-guard.sh" "$dir/bin/fm-turnend-guard-grok.sh" "$dir/bin/fm-operational-input.sh" "$dir/bin/fm-supervision-instructions.sh" "$dir/bin/fm-harness.sh"
@@ -249,6 +250,76 @@ test_hook_silent_with_live_lock_and_fresh_beacon() {
   expect_code 0 "$status" "hook must exit 0 with a live identity-matched watcher lock and fresh beacon"
   [ -z "$out" ] || fail "hook produced output despite a live fresh watcher lock: $out"
   pass "fm-turnend-guard: silent no-op with a live watcher lock and fresh beacon"
+}
+
+test_hook_blocks_healthy_pending_escalation_until_drain() {
+  local dir pid identity out status note
+  dir=$(make_primary_dir "$TMP_ROOT/hook-pending-escalation")
+  : > "$dir/state/task.meta"
+  note='need=choose review semantics | options=keep current; adopt strict | recommend=adopt strict because it is deterministic'
+  printf 'needs-decision [key=review-semantics]: %s\n' "$note" > "$dir/state/task.status"
+  printf '%s\t1\tsignal\ttask.status\tsignal: ignored-foreign-path\n' "$(date +%s)" > "$dir/state/.wake-queue"
+  sleep 60 &
+  pid=$!
+  identity=$(watcher_identity "$dir" "$pid") || {
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    fail "could not identify live watcher holder"
+  }
+  record_watcher_lock "$dir" "$pid" "$identity"
+  touch "$dir/state/.last-watcher-beat"
+
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "a stale generic reply must not finish while a decision escalation remains undrained"
+  assert_contains "$out" "TURN CANNOT END - A WORKER ESCALATION IS STILL UNDRAINED" "pending escalation block omitted its reason"
+  assert_contains "$out" "Decision needed for task [review-semantics]: $note" "pending escalation block omitted the concrete decision"
+  assert_contains "$out" "Run bin/fm-wake-drain.sh first" "pending escalation block omitted the mandatory first action"
+  assert_not_contains "$out" "SUPERVISION IS OFF" "healthy supervision was misreported while blocking an escalation"
+
+  FM_STATE_OVERRIDE="$dir/state" "$ROOT/bin/fm-wake-drain.sh" >/dev/null 2>&1 \
+    || fail "could not drain the escalation queue"
+  out=$(run_hook "$dir" false); status=$?
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_code 0 "$status" "draining the escalation must clear the turn-end enforcement condition"
+  [ -z "$out" ] || fail "guard produced output after the escalation queue was drained: $out"
+  pass "fm-turnend-guard: healthy supervision cannot hide an escalation, and draining clears enforcement"
+}
+
+test_hook_surfaces_legacy_blocker_and_preserves_loop_bound() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-legacy-blocker")
+  printf 'blocked: GitHub login expired; firstmate must authenticate\n' > "$dir/state/legacy.status"
+  printf '%s\t1\tsignal\tlegacy.status\tsignal: legacy.status\n' "$(date +%s)" > "$dir/state/.wake-queue"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 2 "$status" "legacy unstructured blockers must still enforce turn-end relay"
+  assert_contains "$out" "Work blocked for legacy: GitHub login expired; firstmate must authenticate" \
+    "legacy blocker did not surface with concrete content"
+  out=$(run_hook "$dir" true); status=$?
+  expect_code 0 "$status" "the existing one-follow-up loop bound must allow the forced continuation to settle"
+  [ -z "$out" ] || fail "loop-bounded pending escalation produced output: $out"
+  pass "fm-turnend-guard: legacy blockers surface and the one-follow-up loop guard remains bounded"
+}
+
+test_hook_ignores_resolved_cross_home_and_ordinary_queue_records() {
+  local dir out status foreign
+  dir=$(make_primary_dir "$TMP_ROOT/hook-non-escalations")
+  foreign="$TMP_ROOT/foreign-home/state/foreign.status"
+  mkdir -p "$(dirname "$foreign")"
+  printf 'needs-decision: foreign choice\n' > "$foreign"
+  printf 'needs-decision [key=closed]: old choice\nresolved [key=closed]: captain answered\n' > "$dir/state/resolved.status"
+  printf 'working: ordinary progress\n' > "$dir/state/ordinary.status"
+  {
+    printf '%s\t1\tsignal\tresolved.status\tsignal: resolved.status\n' "$(date +%s)"
+    printf '%s\t2\tsignal\t%s\tsignal: %s\n' "$(date +%s)" "$foreign" "$foreign"
+    printf '%s\t3\tsignal\tordinary.status\tsignal: ordinary.status\n' "$(date +%s)"
+    printf '%s\t4\tsignal\tordinary.turn-ended\tsignal: ordinary.turn-ended\n' "$(date +%s)"
+    printf '%s\t5\theartbeat\theartbeat\theartbeat\n' "$(date +%s)"
+  } > "$dir/state/.wake-queue"
+  out=$(run_hook "$dir" false); status=$?
+  expect_code 0 "$status" "resolved, cross-home, ordinary signal/turn-end, and heartbeat rows must not enforce turn end"
+  [ -z "$out" ] || fail "non-escalation queue rows produced guard output: $out"
+  pass "fm-turnend-guard: resolved, cross-home, and ordinary queue records do not false-positive"
 }
 
 test_hook_blocks_with_live_lock_and_stale_beacon() {
@@ -572,7 +643,7 @@ EOF
   assert_contains "$(cat "$log")" '<session-test>' "grok adapter must pass the hook session id"
   assert_not_contains "$(cat "$log")" '<--permission-mode>' "grok adapter must not add a stronger permission mode"
   assert_not_contains "$(cat "$log")" '<bypassPermissions>' "grok adapter must not bypass permissions on forced resume"
-  assert_contains "$(cat "$log")" 'FIRSTMATE_OP: v1 turn-end-guard: TURN WOULD END BLIND' "grok adapter must retain the typed guard kind"
+  assert_contains "$(cat "$log")" 'FIRSTMATE_OP: v1 turn-end-guard: TURN END REFUSED' "grok adapter must retain the typed guard kind"
   pass "fm-turnend-guard-grok: forces one explicitly marked same-session resume when the shared predicate blocks"
 }
 
@@ -697,8 +768,8 @@ test_opencode_plugin_forces_followup() {
   assert_contains "$content" 'encodeFirstmateOperationalInput' "OpenCode plugin must use the typed operational-input constructor"
   assert_contains "$content" 'skipNextIdle' "OpenCode plugin must carry a loop guard"
   assert_contains "$content" 'worktree' "OpenCode plugin must anchor the guard from the git worktree path"
-  assert_contains "$content" 'watcher cycle is missing, failed, or unhealthy' "OpenCode plugin must identify a blind turn as watcher recovery"
-  assert_contains "$content" 'harness recovery instruction below' "OpenCode plugin must delegate recovery action to the shared guard line"
+  assert_contains "$content" 'TURN END REFUSED' "OpenCode plugin must identify a shared-predicate refusal"
+  assert_contains "$content" 'concrete instruction below' "OpenCode plugin must delegate action to the shared guard output"
   assert_not_contains "$content" 'Resume supervision according to the session-start operating block' "OpenCode plugin must not route a blind turn through ordinary continuity"
   pass ".opencode primary plugin: session.idle forces one follow-up through the shared guard"
 }
@@ -746,8 +817,8 @@ if (!promptBody.includes("guard-fired")) {
   console.error(`missing prompt body: ${promptBody}`);
   process.exit(1);
 }
-if (!promptBody.includes("watcher cycle is missing, failed, or unhealthy")) {
-  console.error(`missing recovery-only preamble: ${promptBody}`);
+if (!promptBody.includes("TURN END REFUSED") || !promptBody.includes("concrete instruction below")) {
+  console.error(`missing shared-predicate preamble: ${promptBody}`);
   process.exit(1);
 }
 if (promptBody.includes("Resume supervision according to the session-start operating block")) {
@@ -774,8 +845,8 @@ test_pi_extension_forces_followup() {
   assert_contains "$content" 'deliverAs: "followUp"' "pi extension must queue the follow-up safely"
   assert_contains "$content" 'guardFollowupActive' "pi extension must carry a logical-run loop guard"
   assert_not_contains "$content" 'skipNextTurnEnd' "pi extension kept the internal-turn loop guard"
-  assert_contains "$content" 'watcher cycle is missing, failed, or unhealthy' "pi extension must identify a blind turn as watcher recovery"
-  assert_contains "$content" 'harness recovery instruction below' "pi extension must delegate recovery action to the shared guard line"
+  assert_contains "$content" 'TURN END REFUSED' "pi extension must identify a shared-predicate refusal"
+  assert_contains "$content" 'concrete instruction below' "pi extension must delegate action to the shared guard output"
   assert_not_contains "$content" 'Resume supervision according to the session-start operating block' "pi extension must not route a blind turn through ordinary continuity"
   assert_contains "$content" '.pi-turnend-extension-loaded' "pi extension must write its loaded marker for session-start diagnostics"
   assert_contains "$content" 'lockOwnership' "pi extension loaded marker must respect the session lock"
@@ -821,8 +892,8 @@ const pi = {
   async sendUserMessage(message, options) {
     prompts += 1;
     if (!message.startsWith("\u2063FIRSTMATE_OP: v1 turn-end-guard: ")) throw new Error(`untyped operational prompt: ${message}`);
-    if (!message.includes("TURN WOULD END BLIND")) throw new Error(`unexpected prompt: ${message}`);
-    if (!message.includes("watcher cycle is missing, failed, or unhealthy")) throw new Error(`guard prompt omitted recovery-only state: ${message}`);
+    if (!message.includes("TURN END REFUSED") || !message.includes("TURN WOULD END BLIND")) throw new Error(`unexpected prompt: ${message}`);
+    if (!message.includes("concrete instruction below")) throw new Error(`guard prompt omitted shared-predicate guidance: ${message}`);
     if (message.includes("Resume supervision according to the session-start operating block")) throw new Error(`guard prompt used ordinary continuity: ${message}`);
     if (options?.deliverAs !== "followUp") throw new Error("guard prompt was not a follow-up");
     await handlers.get("agent_settled")?.({ type: "agent_settled" }, {});
@@ -922,6 +993,9 @@ test_hook_silent_when_no_work_in_flight
 test_hook_blocks_when_fresh_beacon_has_no_live_lock
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
+test_hook_blocks_healthy_pending_escalation_until_drain
+test_hook_surfaces_legacy_blocker_and_preserves_loop_bound
+test_hook_ignores_resolved_cross_home_and_ordinary_queue_records
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary
 test_hook_blocks_from_fm_home_state

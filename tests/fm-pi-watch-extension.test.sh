@@ -67,7 +67,11 @@ test_tracked_extension_present_and_self_hashing() {
   assert_contains "$text" "fm_watch_arm_pi" "tracked extension missing tool name"
   assert_contains "$text" "fm-watch-arm-pi" "tracked extension missing command name"
   assert_contains "$text" "fm-watch-arm.sh" "tracked extension missing watcher arm"
-  assert_contains "$text" "sendUserMessage" "tracked extension missing Pi wake API"
+  assert_contains "$text" "sendUserMessage" "tracked extension missing generic Pi wake API"
+  assert_contains "$text" "sendMessage" "tracked extension missing visible escalation relay API"
+  assert_contains "$text" 'customType: "firstmate-escalation-relay"' "tracked extension missing visible escalation message type"
+  assert_contains "$text" 'display: true' "tracked extension does not render escalation relays in active chat"
+  assert_contains "$text" 'triggerTurn: true' "tracked extension does not trigger escalation handling"
   assert_contains "$text" 'encodeFirstmateOperationalInput' "tracked extension does not construct typed synthetic user-role wakes"
   assert_contains "$text" "deliverAs: \"followUp\"" "tracked extension missing followUp delivery"
   assert_contains "$text" ".pi-watch-extension-loaded" "tracked extension missing loaded marker"
@@ -371,6 +375,84 @@ EOF
   expect_code 0 "$status" "Pi scheduled-retry call must not duplicate the extension-owned retry"
   [ -z "$out" ] || fail "Pi scheduled-retry test printed output: $out"
   pass "Pi scheduled retry remains extension-owned after another tool call"
+}
+
+test_pi_escalation_gets_visible_relay_and_triggered_turn() {
+  local repo home plugin log stop out status
+  repo="$TMP_ROOT/pi-escalation-relay-root"
+  home="$TMP_ROOT/pi-escalation-relay-home"
+  log="$TMP_ROOT/pi-escalation-relay.log"
+  stop="$TMP_ROOT/pi-escalation-relay.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm\n' >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+if [ "$count" -eq 1 ]; then
+  note='need=choose API semantics | options=current; strict | recommend=strict because it is deterministic'
+  encoded=$(printf '%s' "$note" | base64 | tr -d '\r\n')
+  printf 'signal: synthetic fm-escalation-v1:review-task:review-semantics:needs-decision:%s\n' "$encoded"
+  exit 0
+fi
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" node --input-type=module 2>&1 <<'EOF'
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+let tool = null;
+const visible = [];
+const userPrompts = [];
+const pi = {
+  on() {},
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendMessage(message, options) {
+    visible.push({ message, options });
+  },
+  sendUserMessage: async (message) => {
+    userPrompts.push(message);
+  },
+};
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("tool-call-escalation", {}, undefined, undefined, {});
+for (let i = 0; i < 500 && visible.length === 0; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+if (visible.length !== 1) throw new Error(`expected one visible relay, got ${visible.length}`);
+if (userPrompts.length !== 0) throw new Error(`escalation used ${userPrompts.length} generic user prompts`);
+const { message, options } = visible[0];
+if (message.customType !== "firstmate-escalation-relay" || message.display !== true) {
+  throw new Error(`relay was not a visible custom chat message: ${JSON.stringify(message)}`);
+}
+if (!message.content.includes("Decision needed for review-task [review-semantics]: need=choose API semantics | options=current; strict | recommend=strict because it is deterministic")) {
+  throw new Error(`relay omitted or rewrote the escalation content: ${message.content}`);
+}
+if (message.content.includes(".status") || message.content.includes("/state/")) {
+  throw new Error(`relay exposed only internal path mechanics: ${message.content}`);
+}
+if (!message.content.includes("run bin/fm-wake-drain.sh first")) {
+  throw new Error(`relay omitted drain-first handling: ${message.content}`);
+}
+if (options?.deliverAs !== "followUp" || options?.triggerTurn !== true) {
+  throw new Error(`relay did not trigger one safe handling turn: ${JSON.stringify(options)}`);
+}
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "Pi escalation must render visibly and trigger one handling turn"
+  [ -z "$out" ] || fail "Pi escalation relay test printed output: $out"
+  pass "Pi escalation renders exact plain-language chat content and triggers handling"
 }
 
 test_pi_actionable_close_starts_single_successor_before_delivery() {
@@ -1986,8 +2068,8 @@ if (!existsSync(process.env.FM_GUARD_LOG)) {
   console.error("turn-end guard was suppressed by an external healthy watcher");
   process.exit(1);
 }
-if (!promptBody.includes("TURN WOULD END BLIND")) {
-  console.error(`missing blind-turn prompt: ${promptBody}`);
+if (!promptBody.includes("TURN END REFUSED")) {
+  console.error(`missing shared-predicate refusal prompt: ${promptBody}`);
   process.exit(1);
 }
 EOF
@@ -2004,6 +2086,7 @@ test_pi_extension_reports_external_healthy_watcher
 test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop
 test_pi_scheduled_retry_call_is_owned_noop
+test_pi_escalation_gets_visible_relay_and_triggered_turn
 test_pi_actionable_close_starts_single_successor_before_delivery
 test_pi_hung_successor_falls_back_to_typed_wake
 test_pi_unretired_successor_falls_back_without_retry

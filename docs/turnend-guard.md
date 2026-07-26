@@ -15,6 +15,8 @@ On 2026-07-04, that exact gap left a parked no-mistakes gate unwatched for about
 
 `bin/fm-turnend-guard.sh` closes the gap by checking the primary's own turn-end path.
 When tasks are in flight and there is no live identity-matched watcher with a fresh beacon, a harness hook must either block the turn end or force a bounded follow-up turn that tells the primary to repair the missing or failed watcher cycle using the recovery instruction in its emitted session-start protocol.
+It also blocks when this home's durable wake queue represents a still-open, undrained `needs-decision` or `blocked` status event, even while watcher supervision is healthy.
+This closes the 2026-07-26 `review-semantics` incident in which Pi received a healthy watcher follow-up, produced a stale generic reply without draining or relaying the concrete review findings, and left the decision queued until the captain's next message.
 
 ## Shared Predicate
 
@@ -34,6 +36,12 @@ A fresh leftover beacon blocks if the watcher lock is missing, dead, or identity
 
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repo-root `state/`.
 `FM_GUARD_GRACE` controls the beacon freshness window and defaults to 300 seconds.
+For queued escalations, the guard accepts only structurally valid signal keys, maps them to regular non-symlink status files under the effective home, and folds each whole status stream through `queued_open_escalations` in `bin/fm-classify-lib.sh`.
+Queue payload paths are display data and never authority, so another home's record cannot select a file.
+A matching `resolved` or verified `captain-held` event closes the key and prevents a false positive.
+Ordinary signals, turn-end markers, stale notices, checks, heartbeats, and terminal status events do not trigger this predicate.
+Draining the queue through `bin/fm-wake-drain.sh` clears the enforcement condition.
+
 If `jq` is missing or hook stdin is empty, the guard fails open and exits 0 because it cannot safely read loop-guard fields.
 
 ## Harness Integrations
@@ -44,6 +52,7 @@ All verified primary harnesses have a tracked integration:
 - `codex`: `.codex/hooks.json` registers a `Stop` hook that reads the hook payload once, anchors the executable to the hook command process working directory, verifies that root is firstmate-shaped and hook-bearing, and pipes the original payload to that checkout's `bin/fm-turnend-guard.sh`.
 - `opencode`: `.opencode/plugins/fm-primary-turnend-guard.js` listens for `session.idle`, lets the watcher-arm coordinator handle normal idle supervision first, runs the shared guard only when that coordinator does not act, and uses `client.session.promptAsync` to force one follow-up prompt when the guard returns 2.
 - `pi`: `.pi/extensions/fm-primary-turnend-guard.ts` listens for `agent_settled`, marks the extension version loaded for session-start checks, runs the shared guard once per logical agent run, and uses `pi.sendUserMessage(..., { deliverAs: "followUp" })` to force one follow-up prompt when the guard returns 2.
+  Its generic preamble delegates to the shared stderr reason because exit 2 can now mean either missing supervision, a pending escalation, or both.
 - `grok`: `.grok/hooks/fm-primary-turnend-guard.json` registers a `Stop` hook that invokes `bin/fm-turnend-guard-grok.sh`.
   The adapter runs the shared guard and, when it returns 2, invokes `grok --resume <sessionId> -p <guard-reason>` with `GROK_TURNEND_GUARD_ACTIVE=1`.
   It does not pass `--permission-mode`, so the passive Stop hook cannot grant stronger tool permissions than Grok's resumed-session default.
@@ -54,6 +63,7 @@ Both payloads include `stop_hook_active`; when it is true, the shared guard exit
 
 OpenCode, Pi, and Grok expose passive lifecycle callbacks for this purpose.
 Their adapters fail open at the hook boundary to avoid corrupting a user session, but they force one follow-up turn when the shared predicate blocks.
+Their preambles describe a generic turn-end refusal and preserve the shared guard's concrete reason rather than incorrectly claiming every refusal means watcher failure.
 Those forced user-role prompts use the canonical `turn-end-guard` operational kind after the U+2063 `FIRSTMATE_OP: ` prefix so Ahoy cannot mistake them for captain-authored boundaries.
 Each adapter carries its own in-process or environment loop guard so the forced follow-up does not recursively schedule another follow-up.
 Pi keeps that latch active across every internal tool turn and clears it only when the generated guard follow-up reaches `agent_settled`, or immediately when follow-up delivery fails.
@@ -149,6 +159,6 @@ No Herdr command was issued and no fleet state was touched; the experiment wrote
 
 ## Tests
 
-`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping (including a secondmate's own home being guarded like the main primary while its child worktrees stay exempt), `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
+`tests/fm-turnend-guard.test.sh` covers the shared predicate, primary scoping (including a secondmate's own home being guarded like the main primary while its child worktrees stay exempt), `FM_HOME` and `FM_STATE_OVERRIDE` precedence, Pi logical-run latch behavior for no-tool and multi-tool runs, pending structured and legacy escalations under healthy supervision, drain clearing, resolved and cross-home exclusions, ordinary queue records, fail-open behavior without `jq`, tracked hook registration for all five harnesses, and the Grok adapter's forced-resume loop guard and permission-mode regression.
 The default behavior suite does not invoke live language-model harnesses.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` opts into the isolated interactive Pi regression recorded above.

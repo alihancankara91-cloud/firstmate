@@ -12,6 +12,9 @@ A failed follow-up never cancels continuity restoration.
 ## Actionable wake ordering
 
 After an actionable Pi or OpenCode child close, the adapter starts and verifies one singleton successor before it delivers the original wake.
+For a decision or blocker status signal, `bin/fm-watch.sh` includes the exact open escalation note in a compact `fm-escalation-v1` token owned by `bin/fm-classify-lib.sh`; legacy unstructured lines use the same transport.
+The Pi bridge decodes that token, translates `needs-decision` or `blocked` into concise plain language, renders it as a visible custom chat message, and sets `triggerTurn: true` with follow-up delivery.
+Other wake kinds retain the typed synthetic user-message path and do not become visible captain escalations.
 It waits at most one readiness timeout per attempt, then sends TERM and waits a bounded retirement confirmation before the next lock-verified exponential retry.
 If the unready arm does not retire within that bound, the adapter keeps ownership, starts no overlapping retry, and delivers the typed fallback immediately.
 When that retained arm later closes, its actual close is classified as a new supervised event without replaying the earlier fallback.
@@ -28,8 +31,8 @@ Codex retains its bounded foreground checkpoint protocol.
 Grok retains its tracked background-task notification protocol.
 No adapter starts a replacement with shell `&`.
 
-The existing turn-end guard implementation and adapters are unchanged.
-They remain the final backstop rather than the normal continuity mechanism.
+The turn-end guard remains the final backstop rather than the normal continuity mechanism.
+It now also refuses one bounded turn end while a home-local queued signal maps to a still-open decision or blocker, independently of watcher health; `docs/turnend-guard.md` owns that predicate.
 
 ## Arm-layer cycle contract
 
@@ -48,7 +51,7 @@ Only the watcher process touches `state/.last-watcher-beat`; no helper process c
 
 ## Regression coverage
 
-`tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops, then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
+`tests/fm-pi-watch-extension.test.sh` checks Pi's first-cycle-or-explicit-repair tool metadata and ownership-based redundant-call no-ops, proves a decision token becomes one visible exact-content chat relay with a triggered handling turn, then simulates actionable and empty child closes against the actual Pi and OpenCode close handlers, blocks prompt delivery to prove the successor launches first, verifies single-flight behavior, changes the session lock before close to prove ownership is rechecked, and hangs each successor arm to prove bounded fallback delivery includes the typed restoration failure.
 `tests/fm-watcher-lock.test.sh` covers verified-successor attach, the typed self-eviction failure, bounded and successor-linked lifecycle rows, and a SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
 `tests/fm-continuity-pretool-check.test.sh` proves the Claude gate rejects only non-recovery, non-steer fleet execution in the precise unhealthy state, allows `bin/fm-send.sh` (plain, env-prefixed, absolute-path, and `--key` forms) during the exact mid-wake-handling watcher lapse, and preserves the existing Stop registration.
 
@@ -92,6 +95,14 @@ Grok ran the real arm wrapper through `run_terminal_command` with its tracked ba
 No shell ampersand was used.
 Command: `FM_GROK_LIVE_E2E=1 tests/fm-grok-continuity-live-e2e.test.sh`.
 Observed result: `ok - grok 0.2.103 (89c3d36fb6f1) [stable] live E2E preserved tracked background completion and shared ledger classification`.
+
+## Escalation-relay evidence, 2026-07-26
+
+Pi 0.82.0 was validated through the real interactive path on a private tmux socket, an isolated project clone, and an isolated `FM_HOME`.
+The fixture wrote one structured `needs-decision` event, and the real watcher emitted its exact-content token before the Pi extension rendered `Decision needed for pi-e2e [live-review]: need=confirm the live relay` visibly in active chat.
+That custom message triggered the handling turn, Pi ran `bin/fm-wake-drain.sh`, the durable queue became empty, the extension had already ledger-linked a successor, and the turn-end guard did not fire.
+Command: `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh`.
+Observed output: `ok - Pi 0.82.0 live E2E covered native Ahoy boundaries, visible escalation relay, triggered handling, drain, and watcher continuity`.
 
 The goal is continuity with fewer supervision tokens and no Pi/OpenCode model-memory re-arm step.
 No zero-latency guarantee is claimed; lock verification, watcher startup, and bounded retry delays remain deliberate safety work.

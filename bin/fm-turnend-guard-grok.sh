@@ -38,7 +38,7 @@ REASON=$(cat "$ERR" 2>/dev/null || true)
 # shellcheck source=bin/fm-operational-input.sh
 . "$ROOT/bin/fm-operational-input.sh"
 fm_operational_input_encode turn-end-guard \
-  "TURN WOULD END BLIND - supervision is off. Repair missing watcher supervision according to the session-start operating block before ending the turn.
+  "TURN END REFUSED - follow the concrete instruction below before ending the turn.
 
 $REASON" \
   PROMPT || exit 0

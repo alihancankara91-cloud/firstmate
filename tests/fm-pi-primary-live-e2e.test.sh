@@ -254,6 +254,8 @@ cp "$ROOT/.pi/extensions/lib/fm-calm-visibility.ts" "$PROJECT/.pi/extensions/lib
 cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$PROJECT/.pi/extensions/lib/fm-operational-input.ts"
 cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$PROJECT/.pi/extensions/fm-primary-turnend-guard.ts"
 cp "$ROOT/bin/fm-watch-arm.sh" "$PROJECT/bin/fm-watch-arm.sh"
+cp "$ROOT/bin/fm-watch.sh" "$PROJECT/bin/fm-watch.sh"
+cp "$ROOT/bin/fm-classify-lib.sh" "$PROJECT/bin/fm-classify-lib.sh"
 cp "$ROOT/bin/fm-operational-input.sh" "$PROJECT/bin/fm-operational-input.sh"
 cp "$ROOT/bin/fm-supervision-instructions.sh" "$PROJECT/bin/fm-supervision-instructions.sh"
 chmod +x "$PROJECT/bin/fm-operational-input.sh"
@@ -277,7 +279,7 @@ sleep 1
 send_prompt "Start supervision with fm_watch_arm_pi and never use bash to arm supervision. After the watcher wake arrives, run bin/fm-wake-drain.sh and reply exactly HANDLED."
 wait_for_text "watcher: started Pi extension arm child 1" || fail "Pi did not render the initial watcher tool result"
 
-printf 'done: pi live e2e watcher fire\n' > "$HOME_DIR/state/pi-e2e.status"
+printf 'needs-decision [key=live-review]: need=confirm the live relay | options=acknowledge; reject | recommend=acknowledge because this is an isolated regression\n' > "$HOME_DIR/state/pi-e2e.status"
 i=0
 while [ "$i" -lt 240 ]; do
   grep -Eq 'reason=actionable-signal.*successor=started:[0-9]+' "$HOME_DIR/state/.watch-cycle-exits.log" 2>/dev/null && break
@@ -286,7 +288,15 @@ while [ "$i" -lt 240 ]; do
 done
 grep -Eq 'reason=actionable-signal.*successor=started:[0-9]+' "$HOME_DIR/state/.watch-cycle-exits.log" 2>/dev/null \
   || fail "Pi extension did not start and ledger-link a successor after the actionable close"
-wait_for_exact_line "HANDLED" 120 || fail "Pi did not drain and settle after its extension-owned successor started"
+wait_for_text "Decision needed for pi-e2e [live-review]: need=confirm the live relay" 120 \
+  || fail "Pi did not render the escalation visibly in active chat"
+i=0
+while [ "$i" -lt 120 ] && [ -s "$HOME_DIR/state/.wake-queue" ]; do
+  sleep 0.5
+  i=$((i + 1))
+done
+[ ! -s "$HOME_DIR/state/.wake-queue" ] || fail "Pi visible escalation turn did not drain the durable queue"
+wait_for_exact_line "HANDLED" 120 || fail "Pi did not settle after draining its extension-owned escalation"
 
 pane=$(capture)
 guard_count=$(printf '%s\n' "$pane" | grep -Fc "TURN WOULD END BLIND - supervision is off." || true)
@@ -311,4 +321,4 @@ wait_for_text "PI_EXIT=0" 60 || fail "Pi did not exit cleanly"
 wait_pid_dead "$watcher_pid" || fail "watcher child survived clean Pi exit"
 wait_pid_dead "$arm_pid" || fail "arm child survived clean Pi exit"
 
-printf 'ok - Pi %s live E2E covered native Ahoy first/later messages, legacy transcripts, near misses, and watcher continuity\n' "$PI_VERSION"
+printf 'ok - Pi %s live E2E covered native Ahoy boundaries, visible escalation relay, triggered handling, drain, and watcher continuity\n' "$PI_VERSION"

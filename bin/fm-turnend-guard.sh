@@ -12,7 +12,10 @@
 # the primary is about to end a turn.
 # Claude and codex can block directly by preserving exit status 2 and stderr.
 # OpenCode, pi, and grok adapters use the same predicate and force one bounded
-# follow-up because their turn-end events are passive.
+# follow-up because their turn-end events are passive. The same predicate also
+# refuses a turn while this home's durable wake queue represents an undrained,
+# still-open decision or blocker, even when watcher supervision is healthy.
+# bin/fm-classify-lib.sh owns the status fold and structured escalation format.
 # See docs/turnend-guard.md for the per-harness mechanics, validation evidence,
 # and fail-open tradeoffs.
 #
@@ -80,23 +83,57 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # --- the actual predicate ----------------------------------------------------
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SCRIPT_DIR/fm-classify-lib.sh"
+
+# A queue row is only a delivery obligation while its structurally mapped,
+# home-local status stream still has the same decision key open. A later
+# resolved/captain-held event closes it, payload paths are ignored, and draining
+# the queue clears this turn-end condition exactly as the handling contract says.
+PENDING_ESCALATIONS=$(queued_open_escalations "$STATE/.wake-queue" "$STATE")
 
 fm_supervision_status "$STATE" "$GRACE"
-[ "$FM_SUP_IN_FLIGHT" -gt 0 ] || exit 0
-fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && exit 0
+WATCHER_UNHEALTHY=0
+if [ "$FM_SUP_IN_FLIGHT" -gt 0 ] && ! fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
+  WATCHER_UNHEALTHY=1
+fi
+[ -n "$PENDING_ESCALATIONS" ] || [ "$WATCHER_UNHEALTHY" -eq 1 ] || exit 0
 
-afk=0
-[ -e "$STATE/.afk" ] && afk=1
-x_mode=0
-[ -f "$CONFIG/x-mode.env" ] && x_mode=1
-REASON=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" --repair-line 2>/dev/null \
-  || printf '%s\n' 'tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn')
 rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
 {
-  printf '●%s\n' "$rule"
-  printf '●  TURN WOULD END BLIND - SUPERVISION IS OFF\n'
-  printf '●  %s task(s) in flight, but no live watcher holds this home lock (last beat: %s).\n' "$FM_SUP_IN_FLIGHT" "$FM_SUP_BEACON_DESC"
-  printf '●  %s\n' "$REASON"
-  printf '●%s\n' "$rule"
+  if [ -n "$PENDING_ESCALATIONS" ]; then
+    printf '●%s\n' "$rule"
+    printf '●  TURN CANNOT END - A WORKER ESCALATION IS STILL UNDRAINED\n'
+    while IFS=$'\t' read -r task key verb note; do
+      [ -n "$task" ] || continue
+      case "$verb" in
+        needs-decision) label='Decision needed' ;;
+        blocked) label='Work blocked' ;;
+        *) continue ;;
+      esac
+      if [ "$key" = default ]; then
+        printf '●  %s for %s: %s\n' "$label" "$task" "$note"
+      else
+        printf '●  %s for %s [%s]: %s\n' "$label" "$task" "$key" "$note"
+      fi
+    done <<EOF
+$PENDING_ESCALATIONS
+EOF
+    printf '●  Run bin/fm-wake-drain.sh first, then relay or resolve the concrete escalation before replying.\n'
+    printf '●%s\n' "$rule"
+  fi
+  if [ "$WATCHER_UNHEALTHY" -eq 1 ]; then
+    afk=0
+    [ -e "$STATE/.afk" ] && afk=1
+    x_mode=0
+    [ -f "$CONFIG/x-mode.env" ] && x_mode=1
+    REASON=$("$SCRIPT_DIR/fm-supervision-instructions.sh" --afk "$afk" --x-mode "$x_mode" --repair-line 2>/dev/null \
+      || printf '%s\n' 'tasks in flight, no live watcher - repair missing watcher supervision according to the session-start operating block before ending the turn')
+    printf '●%s\n' "$rule"
+    printf '●  TURN WOULD END BLIND - SUPERVISION IS OFF\n'
+    printf '●  %s task(s) in flight, but no live watcher holds this home lock (last beat: %s).\n' "$FM_SUP_IN_FLIGHT" "$FM_SUP_BEACON_DESC"
+    printf '●  %s\n' "$REASON"
+    printf '●%s\n' "$rule"
+  fi
 } >&2
 exit 2
