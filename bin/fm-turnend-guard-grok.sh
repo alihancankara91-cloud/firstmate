@@ -3,7 +3,7 @@
 #
 # Grok Stop hooks are passive: exit 2 does not block or feed stderr back to the
 # model. This adapter still uses the shared primary-scoped predicate in
-# fm-turnend-guard.sh. When that predicate says the primary would end blind, the
+# fm-turnend-guard.sh. When that predicate refuses turn completion, the
 # adapter forces one same-session follow-up by running `grok --resume <session>`
 # with a guard instruction. GROK_TURNEND_GUARD_ACTIVE is the loop guard: the
 # nested turn's own Stop hook exits without spawning another nested turn.

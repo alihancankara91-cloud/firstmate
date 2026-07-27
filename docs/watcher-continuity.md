@@ -14,6 +14,7 @@ A failed follow-up never cancels continuity restoration.
 After an actionable Pi or OpenCode child close, the adapter starts and verifies one singleton successor before it delivers the original wake.
 For a decision or blocker status signal, `bin/fm-watch.sh` includes the exact open escalation note in a compact `fm-escalation-v1` token owned by `bin/fm-classify-lib.sh`; legacy unstructured lines use the same transport.
 The Pi bridge decodes that token, translates `needs-decision` or `blocked` into concise plain language, renders it as a visible custom chat message, and sets `triggerTurn: true` with follow-up delivery.
+That native relay is the narrow transport exception to the captain-facing translation rule in `AGENTS.md` section 9; the assistant's reply still translates the evidence normally.
 Other wake kinds retain the typed synthetic user-message path and do not become visible captain escalations.
 It waits at most one readiness timeout per attempt, then sends TERM and waits a bounded retirement confirmation before the next lock-verified exponential retry.
 If the unready arm does not retire within that bound, the adapter keeps ownership, starts no overlapping retry, and delivers the typed fallback immediately.

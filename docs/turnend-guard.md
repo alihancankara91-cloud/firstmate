@@ -1,10 +1,10 @@
 # Primary turn-end supervision guard
 
-This is the authoritative contract for the "no turn ends blind" primary guard referenced from AGENTS.md section 8.
+This is the authoritative contract for the primary turn-end guard referenced from AGENTS.md section 8.
 The turn-end supervision predicate lives in `bin/fm-turnend-guard.sh`.
 Its primary-checkout scope lives in `bin/fm-primary-scope-lib.sh`, shared with the native session-start nudge documented in `docs/sessionstart-nudge.md`.
 Harness-specific tracked hook files only adapt each verified harness's real turn-end mechanism to that shared predicate.
-Related but separate PreToolUse guards deny a bad tool or command shape before it runs rather than detecting a blind turn end afterward: the watcher-arm seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`), the cd-guard (`bin/fm-cd-pretool-check.sh`, `docs/cd-guard.md`), and the primary delegation-shape guard (`bin/fm-subagent-pretool-check.sh`, `docs/subagent-guard.md`).
+Related but separate PreToolUse guards deny a bad tool or command shape before it runs rather than detecting a turn-end refusal afterward: the watcher-arm seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`), the cd-guard (`bin/fm-cd-pretool-check.sh`, `docs/cd-guard.md`), and the primary delegation-shape guard (`bin/fm-subagent-pretool-check.sh`, `docs/subagent-guard.md`).
 Each guard's own document defines its scope; do not infer this guard's scoping, loop safety, or fail-open tradeoffs for its PreToolUse siblings.
 
 ## Gap Closed
@@ -27,8 +27,8 @@ An unmarked checkout, or one with an invalid marker, falls through to the git-di
 That check keeps crewmate and scout worktrees inert because firstmate provisions them as linked git worktrees, where `git rev-parse --git-dir` differs from `git rev-parse --git-common-dir`.
 It also requires `AGENTS.md`, `bin/`, and the effective state directory to exist.
 
-For an in-scope primary checkout, it counts in-flight work from `state/*.meta`.
-If no task is in flight, it exits silently.
+For an in-scope primary checkout, the guard evaluates the watcher-health and queued-escalation predicates independently.
+The watcher-health predicate counts in-flight work from `state/*.meta` and stays silent when no task is in flight.
 If work is in flight, it requires `fm_watcher_healthy <state-dir> <watch-path> [grace-seconds] [home]` from `bin/fm-wake-lib.sh`.
 That is the same identity-matched live lock and fresh beacon check used by `bin/fm-watch-arm.sh`.
 A stale beacon blocks even if a watcher pid is still live.

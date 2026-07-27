@@ -16,9 +16,10 @@ Three consequences were observed, not hypothesized.
   A real crewmate lives in its own backend session with durable state and survives a primary restart.
 - The supervision cycle then stayed down for 73 minutes unnoticed, which silently killed the captain's Workflowy intake channel, since that channel only fires while a watch cycle runs.
 
-The deeper defect is that the bypass did not merely skip dispatch, it made the guard stack structurally inert.
-Only `bin/fm-spawn.sh` writes `state/<id>.meta`, and every guard keys off that record: `bin/fm-supervision-lib.sh` counts `state/*.meta`, and `bin/fm-turnend-guard.sh` exits silently when that count is zero.
-Work started through the harness's own delegation tool writes no metadata, so the in-flight count stayed at zero, the turn-end guard never blocked a blind turn end, and the continuity gate was inert.
+The deeper defect is that the bypass did not merely skip dispatch, it made the work-tracking guard stack structurally inert.
+Only `bin/fm-spawn.sh` writes `state/<id>.meta`, and the supervision-health guards key off that record through `bin/fm-supervision-lib.sh`.
+Work started through the harness's own delegation tool writes no metadata, so the in-flight count stayed at zero, the turn-end guard's supervision-health predicate never blocked a blind turn end, and the continuity gate was inert.
+The separate queued-escalation predicate can still block for a home-local undrained status event, but untracked harness work creates neither that event nor its queue record.
 
 That is the reason the fence has to sit on the harness tool surface, before the primary can create untracked work.
 No additional guard keyed on task metadata can catch this class of failure, because the failure is precisely the absence of that metadata.
@@ -357,8 +358,8 @@ tests/fm-subagent-pretool-check.test.sh
 ## Known residual gap
 
 This change does not close the deeper harness-agnostic defect.
-Every firstmate guard keys off `state/<id>.meta`, and only `bin/fm-spawn.sh` writes that record.
-`bin/fm-supervision-lib.sh` counts `state/*.meta`, and `bin/fm-turnend-guard.sh` exits silently at zero.
+Every supervision-health guard keys off `state/<id>.meta`, and only `bin/fm-spawn.sh` writes that record.
+`bin/fm-supervision-lib.sh` counts `state/*.meta`, and the turn-end guard's supervision-health predicate stays silent at zero.
 Unaccounted primary work therefore reads as idle rather than suspicious.
 
 The durable fix for that class is to make the guards treat "the primary is doing project-shaped work with zero `state/*.meta` files" as a suspicious state rather than an idle one.
