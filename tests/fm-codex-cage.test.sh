@@ -53,6 +53,18 @@ test_profile_security_contract() {
 
 test_wrapper_fails_closed_on_invalid_scope() {
   local out rc
+  if [ "$(/usr/bin/uname -s)" != Darwin ]; then
+    set +e
+    out=$("$CAGE" --worktree "$ROOT" --status-path /tmp/status -- codex 2>&1)
+    rc=$?
+    set -e
+    expect_code 2 "$rc" "unsupported operating systems must fail closed"
+    assert_contains "$out" "no verified external Codex cage is available" \
+      "unsupported operating system refusal is not actionable"
+    pass "wrapper fails closed on unsupported operating systems"
+    return
+  fi
+
   set +e
   out=$("$CAGE" --worktree "$TMP_ROOT/missing" --status-path /tmp/status -- codex 2>&1)
   rc=$?
@@ -242,7 +254,9 @@ test_spawn_templates_require_the_external_cage() {
 
 test_profile_security_contract
 test_wrapper_fails_closed_on_invalid_scope
-test_wrapper_sanitizes_environment_and_binds_exact_paths
+if [ "$(/usr/bin/uname -s)" = Darwin ]; then
+  test_wrapper_sanitizes_environment_and_binds_exact_paths
+fi
 test_public_github_clone_helper
 test_live_harness_preserves_evidence
 test_spawn_templates_require_the_external_cage
