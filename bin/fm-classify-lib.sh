@@ -332,6 +332,7 @@ queued_open_escalations() {  # <wake-queue> <state-dir>
   while IFS=$'\t' read -r epoch seq kind queue_key payload; do
     [ "$kind" = signal ] || continue
     fm_wake_status_key_map "$queue_key" || continue
+    [ "$FM_WAKE_STATUS_HISTORICAL" = false ] || continue
     status_key=$FM_WAKE_STATUS_KEY
     statusf="$state/$status_key"
     [ -f "$statusf" ] && [ ! -L "$statusf" ] || continue

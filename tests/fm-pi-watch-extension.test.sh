@@ -1930,7 +1930,7 @@ EOF
   pass "OpenCode close handler verifies session-lock ownership before successor launch"
 }
 
-test_opencode_watch_arm_coordinates_with_turnend_guard() {
+test_opencode_watch_arm_runs_guard_after_arming() {
   local arm_plugin guard_plugin repo home log guard_log out status
   arm_plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
   guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
@@ -1949,8 +1949,9 @@ printf 'watcher: started pid=1 (beacon fresh)\n'
 SH
   cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
 #!/usr/bin/env bash
+[ -s "${FM_ARM_LOG:?}" ] || exit 99
 printf 'guard\n' >> "${FM_GUARD_LOG:?}"
-printf 'guard should not run\n' >&2
+printf 'guard ran after supervision armed\n' >&2
 exit 2
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh" "$repo/bin/fm-turnend-guard.sh"
@@ -1987,20 +1988,20 @@ if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run");
   process.exit(1);
 }
-if (existsSync(process.env.FM_GUARD_LOG)) {
-  console.error("turn-end guard ran before the watch arm could establish supervision");
+if (!existsSync(process.env.FM_GUARD_LOG)) {
+  console.error("turn-end guard did not run after the watch arm established supervision");
   process.exit(1);
 }
-if (promptBody) {
-  console.error(`unexpected prompt: ${promptBody}`);
+if (!promptBody.includes("TURN END REFUSED") || !promptBody.includes("guard ran after supervision armed")) {
+  console.error(`missing post-arm guard prompt: ${promptBody}`);
   process.exit(1);
 }
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode turn-end guard must let the auto-arm plugin establish supervision first"
+  expect_code 0 "$status" "OpenCode turn-end guard must run after the auto-arm plugin establishes supervision"
   [ -z "$out" ] || fail "OpenCode coordination test printed output: $out"
-  pass "OpenCode watcher plugin coordinates with the turn-end guard"
+  pass "OpenCode watcher plugin establishes supervision before the turn-end guard runs"
 }
 
 test_opencode_healthy_arm_output_does_not_suppress_guard() {
@@ -2111,5 +2112,5 @@ test_opencode_late_unretired_close_resumes_supervision
 test_opencode_empty_close_retries_instead_of_disappearing
 test_opencode_established_empty_close_honors_retry_limit
 test_opencode_actionable_close_rechecks_session_lock
-test_opencode_watch_arm_coordinates_with_turnend_guard
+test_opencode_watch_arm_runs_guard_after_arming
 test_opencode_healthy_arm_output_does_not_suppress_guard

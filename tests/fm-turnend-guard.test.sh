@@ -309,17 +309,19 @@ test_hook_ignores_resolved_cross_home_and_ordinary_queue_records() {
   printf 'needs-decision: foreign choice\n' > "$foreign"
   printf 'needs-decision [key=closed]: old choice\nresolved [key=closed]: captain answered\n' > "$dir/state/resolved.status"
   printf 'working: ordinary progress\n' > "$dir/state/ordinary.status"
+  printf 'needs-decision [key=old]: historical choice\n' > "$dir/state/historical.status"
   {
     printf '%s\t1\tsignal\tresolved.status\tsignal: resolved.status\n' "$(date +%s)"
     printf '%s\t2\tsignal\t%s\tsignal: %s\n' "$(date +%s)" "$foreign" "$foreign"
     printf '%s\t3\tsignal\tordinary.status\tsignal: ordinary.status\n' "$(date +%s)"
     printf '%s\t4\tsignal\tordinary.turn-ended\tsignal: ordinary.turn-ended\n' "$(date +%s)"
-    printf '%s\t5\theartbeat\theartbeat\theartbeat\n' "$(date +%s)"
+    printf '%s\t5\tsignal\thistorical.turn-ended\tsignal: historical.turn-ended\n' "$(date +%s)"
+    printf '%s\t6\theartbeat\theartbeat\theartbeat\n' "$(date +%s)"
   } > "$dir/state/.wake-queue"
   out=$(run_hook "$dir" false); status=$?
-  expect_code 0 "$status" "resolved, cross-home, ordinary signal/turn-end, and heartbeat rows must not enforce turn end"
+  expect_code 0 "$status" "resolved, cross-home, ordinary, historical turn-end, and heartbeat rows must not enforce turn end"
   [ -z "$out" ] || fail "non-escalation queue rows produced guard output: $out"
-  pass "fm-turnend-guard: resolved, cross-home, and ordinary queue records do not false-positive"
+  pass "fm-turnend-guard: resolved, cross-home, ordinary, and historical queue records do not false-positive"
 }
 
 test_hook_blocks_with_live_lock_and_stale_beacon() {
