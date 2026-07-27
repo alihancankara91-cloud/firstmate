@@ -300,6 +300,7 @@ test_pause_verb_override_renders_all_brief_scaffolds() {
       "$kind brief did not receive the classifier-owned structured decision format"
     assert_grep 'blocked [key=<slug>]: need=<concrete blocker> | action=<what firstmate must do> | recommend=<next step and why>' "$brief" \
       "$kind brief did not receive the classifier-owned structured blocker format"
+    # shellcheck disable=SC2016 # Literal backticks must remain unexpanded.
     assert_grep 'Older unstructured `needs-decision:` and `blocked:` lines remain compatible' "$brief" \
       "$kind brief omitted the legacy compatibility statement"
     assert_grep 'or a blocker clears' "$brief" \

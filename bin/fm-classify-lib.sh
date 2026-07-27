@@ -327,9 +327,9 @@ EOF
 # for the structural queue-key mapper. Payload paths and records for other homes
 # are never authority. Output is TAB-separated task, key, verb, and exact note.
 queued_open_escalations() {  # <wake-queue> <state-dir>
-  local queue=$1 state=$2 epoch seq kind queue_key payload status_key statusf task open key verb note seen=''
+  local queue=$1 state=$2 _epoch _seq kind queue_key _payload status_key statusf task open key verb note seen=''
   [ -s "$queue" ] || return 0
-  while IFS=$'\t' read -r epoch seq kind queue_key payload; do
+  while IFS=$'\t' read -r _epoch _seq kind queue_key _payload; do
     [ "$kind" = signal ] || continue
     fm_wake_status_key_map "$queue_key" || continue
     [ "$FM_WAKE_STATUS_HISTORICAL" = false ] || continue
