@@ -2004,6 +2004,91 @@ EOF
   pass "OpenCode watcher plugin establishes supervision before the turn-end guard runs"
 }
 
+test_opencode_failed_arm_does_not_suppress_guard() {
+  local arm_plugin guard_plugin repo home log guard_log out status
+  arm_plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
+  guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  repo="$TMP_ROOT/opencode-failed-arm-root"
+  home="$TMP_ROOT/opencode-failed-arm-home"
+  log="$TMP_ROOT/opencode-failed-arm.log"
+  guard_log="$TMP_ROOT/opencode-failed-arm-guard.log"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  git init -q "$repo"
+  : > "$repo/AGENTS.md"
+  : > "$home/state/task.meta"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'attempt\n' >> "${FM_ARM_LOG:?}"
+attempts=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+if [ "$attempts" -eq 1 ]; then
+  printf 'watcher: FAILED - synthetic recoverable failure\n'
+  exit 1
+fi
+printf 'watcher: started pid=1 (beacon fresh)\n'
+SH
+  cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'guard\n' >> "${FM_GUARD_LOG:?}"
+printf 'guard ran after recoverable arm failure\n' >&2
+exit 2
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh" "$repo/bin/fm-turnend-guard.sh"
+  out=$(ARM_PLUGIN="$arm_plugin" GUARD_PLUGIN="$guard_plugin" WORKTREE="$repo" FM_HOME="$home" \
+    FM_ARM_LOG="$log" FM_GUARD_LOG="$guard_log" FM_WATCH_REARM_RETRY_BASE_MS=1 \
+    FM_WATCH_REARM_RETRY_MAX_MS=1 node 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const armMod = await import(pathToFileURL(process.env.ARM_PLUGIN).href);
+const guardMod = await import(pathToFileURL(process.env.GUARD_PLUGIN).href);
+let promptBody = "";
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      promptBody = request.body.parts[0].text;
+    },
+  },
+};
+await armMod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+const guardHooks = await guardMod.FmPrimaryTurnendGuard({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
+if (!existsSync(process.env.FM_GUARD_LOG)) {
+  console.error("failed arm suppressed the turn-end guard");
+  process.exit(1);
+}
+if (!promptBody.includes("TURN END REFUSED") || !promptBody.includes("guard ran after recoverable arm failure")) {
+  console.error(`missing guard prompt after failed arm: ${promptBody}`);
+  process.exit(1);
+}
+for (let i = 0; i < 250; i += 1) {
+  const attempts = existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length
+    : 0;
+  if (attempts >= 2) break;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+const attempts = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length;
+if (attempts < 2) {
+  console.error(`recoverable failure did not reach an armed retry: attempts=${attempts}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "OpenCode failed arm must fall through to the guard while retrying supervision"
+  [ -z "$out" ] || fail "OpenCode failed-arm guard test printed output: $out"
+  pass "OpenCode failed arm cannot suppress the guard while its retry establishes supervision"
+}
+
 test_opencode_healthy_arm_output_does_not_suppress_guard() {
   local arm_plugin guard_plugin repo home log guard_log out status
   arm_plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
@@ -2113,4 +2198,5 @@ test_opencode_empty_close_retries_instead_of_disappearing
 test_opencode_established_empty_close_honors_retry_limit
 test_opencode_actionable_close_rechecks_session_lock
 test_opencode_watch_arm_runs_guard_after_arming
+test_opencode_failed_arm_does_not_suppress_guard
 test_opencode_healthy_arm_output_does_not_suppress_guard
