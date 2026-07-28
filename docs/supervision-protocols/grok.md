@@ -31,7 +31,7 @@ When you see a background-task-completed system reminder for the arm:
    See [`watcher-continuity.md`](../watcher-continuity.md) for the arm-layer successor and clean-close failure contract.
 
 Grok Stop hooks are passive.
-The primary project hook runs `bin/fm-turnend-guard-grok.sh`, which forces at most one same-session follow-up via `grok --resume` when a turn would end blind.
+The primary project hook runs `bin/fm-turnend-guard-grok.sh`, which forces at most one same-session follow-up via `grok --resume` when the shared turn-end predicate refuses completion.
 That is a backstop, not the normal wake path.
 After any forced follow-up, arm the watcher with the background protocol above.
 

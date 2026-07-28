@@ -73,6 +73,21 @@ FM_PAUSE_RESURFACE_SECS_DEFAULT=3600
 FM_CLASSIFY_RESOLVE_VERB_DEFAULT='resolved'
 FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT='captain-held'
 
+# The structured escalation line contract below is the ONE full owner of the
+# format emitted into newly scaffolded worker instructions. Callers and docs
+# cross-reference this function rather than restating its fields. Legacy
+# "needs-decision: <note>" and "blocked: <note>" lines remain valid inputs to
+# every classifier and fold, so already-running and older workers still surface.
+status_escalation_format_contract() {
+  cat <<'EOF'
+For every new decision or blocker, use one concise single-line structured escalation with a stable key.
+- `needs-decision [key=<slug>]: need=<concrete decision> | options=<A; B; ...> | recommend=<option and why>`
+- `blocked [key=<slug>]: need=<concrete blocker> | action=<what firstmate must do> | recommend=<next step and why>`
+Keep each value non-empty and do not use tabs, newlines, or the literal ` | ` separator inside a value.
+Older unstructured `needs-decision:` and `blocked:` lines remain compatible, but newly scaffolded work must use the structured form above.
+EOF
+}
+
 # Return the last non-blank line of a status file (empty if missing/blank).
 last_status_line() {
   local f=$1
@@ -186,6 +201,38 @@ _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
     *) printf 'default' ;;
   esac
 }
+
+# 0 only when one line matches the structured contract emitted by
+# status_escalation_format_contract. Classification never requires this: legacy
+# unstructured decision and blocker lines intentionally remain actionable.
+status_escalation_is_structured() {  # <status-line>
+  local line=$1 verb prefix key note first second third
+  verb=$(status_line_verb "$line")
+  case "$verb" in needs-decision|blocked) ;; *) return 1 ;; esac
+  prefix=${line%%:*}
+  case "$prefix" in *\[key=*\]*) ;; *) return 1 ;; esac
+  key=$(_fm_decision_key "$line") || return 1
+  [ "$key" != default ] || return 1
+  note=$(status_line_note "$line")
+  case "$verb:$note" in
+    needs-decision:need=*' | options='*' | recommend='*)
+      first=${note#need=}; first=${first%%' | options='*}
+      second=${note#*' | options='}; second=${second%%' | recommend='*}
+      third=${note#*' | recommend='}
+      ;;
+    blocked:need=*' | action='*' | recommend='*)
+      first=${note#need=}; first=${first%%' | action='*}
+      second=${note#*' | action='}; second=${second%%' | recommend='*}
+      third=${note#*' | recommend='}
+      ;;
+    *) return 1 ;;
+  esac
+  [ -n "$(printf '%s' "$first" | tr -d '[:space:]')" ] || return 1
+  [ -n "$(printf '%s' "$second" | tr -d '[:space:]')" ] || return 1
+  [ -n "$(printf '%s' "$third" | tr -d '[:space:]')" ] || return 1
+  case "$first$second$third" in *$'\t'*|*$'\n'*|*' | '*) return 1 ;; esac
+  return 0
+}
 # Drop the record for <key> from a newline-terminated "<key>\t<verb>\t<note>" set.
 # Portable (no associative arrays) so the fold runs on bash 3.2 as well as 4+.
 _fm_decision_drop() {  # <open-set> <key>
@@ -231,6 +278,75 @@ status_open_decisions() {  # <status-file>
     esac
   done < "$f"
   printf '%s' "$open"
+}
+
+# Encode one escalation into the watcher reason without exposing a status path as
+# the only content. The token is single-field queue-safe and decodes to the exact
+# note. The task, key, and verb alphabets cannot contain colons. Pi's existing
+# watcher bridge translates this token into a visible captain-facing message.
+status_escalation_token() {  # <task> <key> <verb> <note>
+  local task=$1 key=$2 verb=$3 note=$4 encoded
+  case "$task:$key:$verb" in
+    *[!A-Za-z0-9._:-]*) return 1 ;;
+  esac
+  case "$verb" in needs-decision|blocked) ;; *) return 1 ;; esac
+  encoded=$(printf '%s' "$note" | base64 | tr -d '\r\n') || return 1
+  printf 'fm-escalation-v1:%s:%s:%s:%s' "$task" "$key" "$verb" "$encoded"
+}
+
+# Print zero or more space-prefixed escalation tokens for the local status files
+# represented by one watcher signal batch. A turn-ended key maps only to its
+# sibling home-local status file. Open-set folding, rather than last-line reads,
+# keeps an earlier unresolved decision visible behind later unrelated events.
+signal_escalation_tokens() {  # <status-or-turn-ended-path> ...
+  local f base task statusf open key verb note token seen=''
+  for f in "$@"; do
+    base=${f##*/}
+    case "$base" in
+      *.status) task=${base%.status}; statusf=$f ;;
+      *.turn-ended) task=${base%.turn-ended}; statusf=${f%/*}/$task.status ;;
+      *) continue ;;
+    esac
+    case "$task" in ''|.*|*[!A-Za-z0-9._-]*) continue ;; esac
+    [ -f "$statusf" ] && [ ! -L "$statusf" ] || continue
+    open=$(status_open_decisions "$statusf")
+    while IFS=$'\t' read -r key verb note; do
+      [ -n "$key" ] || continue
+      case "$seen" in *"|$task:$key|"*) continue ;; esac
+      token=$(status_escalation_token "$task" "$key" "$verb" "$note") || continue
+      seen="$seen|$task:$key|"
+      printf ' %s' "$token"
+    done <<EOF
+$open
+EOF
+  done
+}
+
+# Print the still-open local escalations represented by undrained signal records
+# in one home's durable wake queue. Requires fm-wake-lib.sh to be sourced first
+# for the structural queue-key mapper. Payload paths and records for other homes
+# are never authority. Output is TAB-separated task, key, verb, and exact note.
+queued_open_escalations() {  # <wake-queue> <state-dir>
+  local queue=$1 state=$2 _epoch _seq kind queue_key _payload status_key statusf task open key verb note seen=''
+  [ -s "$queue" ] || return 0
+  while IFS=$'\t' read -r _epoch _seq kind queue_key _payload; do
+    [ "$kind" = signal ] || continue
+    fm_wake_status_key_map "$queue_key" || continue
+    [ "$FM_WAKE_STATUS_HISTORICAL" = false ] || continue
+    status_key=$FM_WAKE_STATUS_KEY
+    statusf="$state/$status_key"
+    [ -f "$statusf" ] && [ ! -L "$statusf" ] || continue
+    task=${status_key%.status}
+    open=$(status_open_decisions "$statusf")
+    while IFS=$'\t' read -r key verb note; do
+      [ -n "$key" ] || continue
+      case "$seen" in *"|$task:$key|"*) continue ;; esac
+      seen="$seen|$task:$key|"
+      printf '%s\t%s\t%s\t%s\n' "$task" "$key" "$verb" "$note"
+    done <<EOF
+$open
+EOF
+  done < "$queue"
 }
 
 # Fold material routed-work phases in the same keyed event stream.

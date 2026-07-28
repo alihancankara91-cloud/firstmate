@@ -67,7 +67,11 @@ test_tracked_extension_present_and_self_hashing() {
   assert_contains "$text" "fm_watch_arm_pi" "tracked extension missing tool name"
   assert_contains "$text" "fm-watch-arm-pi" "tracked extension missing command name"
   assert_contains "$text" "fm-watch-arm.sh" "tracked extension missing watcher arm"
-  assert_contains "$text" "sendUserMessage" "tracked extension missing Pi wake API"
+  assert_contains "$text" "sendUserMessage" "tracked extension missing generic Pi wake API"
+  assert_contains "$text" "sendMessage" "tracked extension missing visible escalation relay API"
+  assert_contains "$text" 'customType: "firstmate-escalation-relay"' "tracked extension missing visible escalation message type"
+  assert_contains "$text" 'display: true' "tracked extension does not render escalation relays in active chat"
+  assert_contains "$text" 'triggerTurn: true' "tracked extension does not trigger escalation handling"
   assert_contains "$text" 'encodeFirstmateOperationalInput' "tracked extension does not construct typed synthetic user-role wakes"
   assert_contains "$text" "deliverAs: \"followUp\"" "tracked extension missing followUp delivery"
   assert_contains "$text" ".pi-watch-extension-loaded" "tracked extension missing loaded marker"
@@ -371,6 +375,84 @@ EOF
   expect_code 0 "$status" "Pi scheduled-retry call must not duplicate the extension-owned retry"
   [ -z "$out" ] || fail "Pi scheduled-retry test printed output: $out"
   pass "Pi scheduled retry remains extension-owned after another tool call"
+}
+
+test_pi_escalation_gets_visible_relay_and_triggered_turn() {
+  local repo home plugin log stop out status
+  repo="$TMP_ROOT/pi-escalation-relay-root"
+  home="$TMP_ROOT/pi-escalation-relay-home"
+  log="$TMP_ROOT/pi-escalation-relay.log"
+  stop="$TMP_ROOT/pi-escalation-relay.stop"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm\n' >> "${FM_ARM_LOG:?}"
+count=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+if [ "$count" -eq 1 ]; then
+  note='need=choose API semantics | options=current; strict | recommend=strict because it is deterministic'
+  encoded=$(printf '%s' "$note" | base64 | tr -d '\r\n')
+  printf 'signal: synthetic fm-escalation-v1:review-task:review-semantics:needs-decision:%s\n' "$encoded"
+  exit 0
+fi
+trap 'exit 0' TERM INT
+while [ ! -e "$FM_STOP_FILE" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" node --input-type=module 2>&1 <<'EOF'
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+let tool = null;
+const visible = [];
+const userPrompts = [];
+const pi = {
+  on() {},
+  registerCommand() {},
+  registerTool(candidate) {
+    if (candidate.name === "fm_watch_arm_pi") tool = candidate;
+  },
+  sendMessage(message, options) {
+    visible.push({ message, options });
+  },
+  sendUserMessage: async (message) => {
+    userPrompts.push(message);
+  },
+};
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await tool.execute("tool-call-escalation", {}, undefined, undefined, {});
+for (let i = 0; i < 500 && visible.length === 0; i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+if (visible.length !== 1) throw new Error(`expected one visible relay, got ${visible.length}`);
+if (userPrompts.length !== 0) throw new Error(`escalation used ${userPrompts.length} generic user prompts`);
+const { message, options } = visible[0];
+if (message.customType !== "firstmate-escalation-relay" || message.display !== true) {
+  throw new Error(`relay was not a visible custom chat message: ${JSON.stringify(message)}`);
+}
+if (!message.content.includes("Decision needed for review-task [review-semantics]: need=choose API semantics | options=current; strict | recommend=strict because it is deterministic")) {
+  throw new Error(`relay omitted or rewrote the escalation content: ${message.content}`);
+}
+if (message.content.includes(".status") || message.content.includes("/state/")) {
+  throw new Error(`relay exposed only internal path mechanics: ${message.content}`);
+}
+if (!message.content.includes("run bin/fm-wake-drain.sh first")) {
+  throw new Error(`relay omitted drain-first handling: ${message.content}`);
+}
+if (options?.deliverAs !== "followUp" || options?.triggerTurn !== true) {
+  throw new Error(`relay did not trigger one safe handling turn: ${JSON.stringify(options)}`);
+}
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "Pi escalation must render visibly and trigger one handling turn"
+  [ -z "$out" ] || fail "Pi escalation relay test printed output: $out"
+  pass "Pi escalation renders exact plain-language chat content and triggers handling"
 }
 
 test_pi_actionable_close_starts_single_successor_before_delivery() {
@@ -1848,7 +1930,7 @@ EOF
   pass "OpenCode close handler verifies session-lock ownership before successor launch"
 }
 
-test_opencode_watch_arm_coordinates_with_turnend_guard() {
+test_opencode_watch_arm_runs_guard_after_arming() {
   local arm_plugin guard_plugin repo home log guard_log out status
   arm_plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
   guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
@@ -1867,8 +1949,9 @@ printf 'watcher: started pid=1 (beacon fresh)\n'
 SH
   cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
 #!/usr/bin/env bash
+[ -s "${FM_ARM_LOG:?}" ] || exit 99
 printf 'guard\n' >> "${FM_GUARD_LOG:?}"
-printf 'guard should not run\n' >&2
+printf 'guard ran after supervision armed\n' >&2
 exit 2
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh" "$repo/bin/fm-turnend-guard.sh"
@@ -1905,20 +1988,105 @@ if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run");
   process.exit(1);
 }
-if (existsSync(process.env.FM_GUARD_LOG)) {
-  console.error("turn-end guard ran before the watch arm could establish supervision");
+if (!existsSync(process.env.FM_GUARD_LOG)) {
+  console.error("turn-end guard did not run after the watch arm established supervision");
   process.exit(1);
 }
-if (promptBody) {
-  console.error(`unexpected prompt: ${promptBody}`);
+if (!promptBody.includes("TURN END REFUSED") || !promptBody.includes("guard ran after supervision armed")) {
+  console.error(`missing post-arm guard prompt: ${promptBody}`);
   process.exit(1);
 }
 EOF
 )
   status=$?
-  expect_code 0 "$status" "OpenCode turn-end guard must let the auto-arm plugin establish supervision first"
+  expect_code 0 "$status" "OpenCode turn-end guard must run after the auto-arm plugin establishes supervision"
   [ -z "$out" ] || fail "OpenCode coordination test printed output: $out"
-  pass "OpenCode watcher plugin coordinates with the turn-end guard"
+  pass "OpenCode watcher plugin establishes supervision before the turn-end guard runs"
+}
+
+test_opencode_failed_arm_does_not_suppress_guard() {
+  local arm_plugin guard_plugin repo home log guard_log out status
+  arm_plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
+  guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  repo="$TMP_ROOT/opencode-failed-arm-root"
+  home="$TMP_ROOT/opencode-failed-arm-home"
+  log="$TMP_ROOT/opencode-failed-arm.log"
+  guard_log="$TMP_ROOT/opencode-failed-arm-guard.log"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  git init -q "$repo"
+  : > "$repo/AGENTS.md"
+  : > "$home/state/task.meta"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'attempt\n' >> "${FM_ARM_LOG:?}"
+attempts=$(wc -l < "$FM_ARM_LOG" | tr -d '[:space:]')
+if [ "$attempts" -eq 1 ]; then
+  printf 'watcher: FAILED - synthetic recoverable failure\n'
+  exit 1
+fi
+printf 'watcher: started pid=1 (beacon fresh)\n'
+SH
+  cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'guard\n' >> "${FM_GUARD_LOG:?}"
+printf 'guard ran after recoverable arm failure\n' >&2
+exit 2
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh" "$repo/bin/fm-turnend-guard.sh"
+  out=$(ARM_PLUGIN="$arm_plugin" GUARD_PLUGIN="$guard_plugin" WORKTREE="$repo" FM_HOME="$home" \
+    FM_ARM_LOG="$log" FM_GUARD_LOG="$guard_log" FM_WATCH_REARM_RETRY_BASE_MS=1 \
+    FM_WATCH_REARM_RETRY_MAX_MS=1 node 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const armMod = await import(pathToFileURL(process.env.ARM_PLUGIN).href);
+const guardMod = await import(pathToFileURL(process.env.GUARD_PLUGIN).href);
+let promptBody = "";
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      promptBody = request.body.parts[0].text;
+    },
+  },
+};
+await armMod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+const guardHooks = await guardMod.FmPrimaryTurnendGuard({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
+if (!existsSync(process.env.FM_GUARD_LOG)) {
+  console.error("failed arm suppressed the turn-end guard");
+  process.exit(1);
+}
+if (!promptBody.includes("TURN END REFUSED") || !promptBody.includes("guard ran after recoverable arm failure")) {
+  console.error(`missing guard prompt after failed arm: ${promptBody}`);
+  process.exit(1);
+}
+for (let i = 0; i < 250; i += 1) {
+  const attempts = existsSync(process.env.FM_ARM_LOG)
+    ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length
+    : 0;
+  if (attempts >= 2) break;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+const attempts = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n").length;
+if (attempts < 2) {
+  console.error(`recoverable failure did not reach an armed retry: attempts=${attempts}`);
+  process.exit(1);
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "OpenCode failed arm must fall through to the guard while retrying supervision"
+  [ -z "$out" ] || fail "OpenCode failed-arm guard test printed output: $out"
+  pass "OpenCode failed arm cannot suppress the guard while its retry establishes supervision"
 }
 
 test_opencode_healthy_arm_output_does_not_suppress_guard() {
@@ -1986,8 +2154,8 @@ if (!existsSync(process.env.FM_GUARD_LOG)) {
   console.error("turn-end guard was suppressed by an external healthy watcher");
   process.exit(1);
 }
-if (!promptBody.includes("TURN WOULD END BLIND")) {
-  console.error(`missing blind-turn prompt: ${promptBody}`);
+if (!promptBody.includes("TURN END REFUSED")) {
+  console.error(`missing shared-predicate refusal prompt: ${promptBody}`);
   process.exit(1);
 }
 EOF
@@ -2004,6 +2172,7 @@ test_pi_extension_reports_external_healthy_watcher
 test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop
 test_pi_scheduled_retry_call_is_owned_noop
+test_pi_escalation_gets_visible_relay_and_triggered_turn
 test_pi_actionable_close_starts_single_successor_before_delivery
 test_pi_hung_successor_falls_back_to_typed_wake
 test_pi_unretired_successor_falls_back_without_retry
@@ -2028,5 +2197,6 @@ test_opencode_late_unretired_close_resumes_supervision
 test_opencode_empty_close_retries_instead_of_disappearing
 test_opencode_established_empty_close_honors_retry_limit
 test_opencode_actionable_close_rechecks_session_lock
-test_opencode_watch_arm_coordinates_with_turnend_guard
+test_opencode_watch_arm_runs_guard_after_arming
+test_opencode_failed_arm_does_not_suppress_guard
 test_opencode_healthy_arm_output_does_not_suppress_guard

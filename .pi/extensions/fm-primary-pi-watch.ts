@@ -26,6 +26,13 @@ type CloseClassification = {
   message: string;
 };
 
+type EscalationRelay = {
+  task: string;
+  key: string;
+  verb: "needs-decision" | "blocked";
+  note: string;
+};
+
 type WatchToolShellState = {
   shell?: Box;
   call?: Component;
@@ -131,6 +138,39 @@ function actionableLine(output: string): string {
   return lines.find((line) => /^(signal:|stale:|check:|heartbeat($|:))/.test(line)) || "";
 }
 
+function escalationRelays(output: string): EscalationRelay[] {
+  const relays: EscalationRelay[] = [];
+  const seen = new Set<string>();
+  const pattern = /(?:^|\s)fm-escalation-v1:([A-Za-z0-9._-]+):([A-Za-z0-9._-]+):(needs-decision|blocked):([A-Za-z0-9+/=]*)/g;
+  for (const match of output.matchAll(pattern)) {
+    const [, task, key, verb, encodedNote] = match;
+    if (!task || !key || !verb || encodedNote === undefined) continue;
+    const identity = `${task}:${key}`;
+    if (seen.has(identity)) continue;
+    let note = "";
+    try {
+      note = Buffer.from(encodedNote, "base64").toString("utf8");
+    } catch {
+      continue;
+    }
+    if (!note) continue;
+    seen.add(identity);
+    relays.push({ task, key, verb: verb as EscalationRelay["verb"], note });
+  }
+  return relays;
+}
+
+function renderEscalationRelay(relays: EscalationRelay[]): string {
+  const lines = relays.map(({ task, key, verb, note }) => {
+    const identity = key === "default" ? task : `${task} [${key}]`;
+    return verb === "needs-decision"
+      ? `Decision needed for ${identity}: ${note}`
+      : `The ${identity} work is blocked: ${note}`;
+  });
+  lines.push("Firstmate: run bin/fm-wake-drain.sh first, then handle every escalation above before replying.");
+  return lines.join("\n");
+}
+
 function classifyClose(stdout: string, stderr: string, code: number | null, signal: NodeJS.Signals | null): CloseClassification {
   const combined = `${stdout}\n${stderr}`.trim();
   const reason = actionableLine(combined);
@@ -193,6 +233,23 @@ export default function (pi: ExtensionAPI) {
   process.once("exit", cleanupOnProcessExit);
 
   async function sendWake(message: string): Promise<void> {
+    const relays = escalationRelays(message);
+    if (relays.length > 0) {
+      try {
+        pi.sendMessage(
+          {
+            customType: "firstmate-escalation-relay",
+            content: renderEscalationRelay(relays),
+            display: true,
+            details: { kind: "worker-escalation", relays },
+          },
+          { deliverAs: "followUp", triggerTurn: true },
+        );
+        return;
+      } catch {
+        // Fall through to the typed user-role wake if visible relay delivery fails.
+      }
+    }
     const content = encodeFirstmateOperationalInput(
       "watcher",
       `FIRSTMATE WATCHER WAKE: ${message}\n\nRun bin/fm-wake-drain.sh first and handle the queued wake. Watcher continuity is extension-owned.`,

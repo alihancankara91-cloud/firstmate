@@ -394,6 +394,8 @@ When evidence uses an internal label, rewrite it before sending:
 Never relay worker reports, status lines, tool output, validation-state labels, or decision records verbatim into captain chat.
 Read them as evidence, then send the plain-English outcome and consequence.
 Private evidence reports may retain exact identifiers, paths, status lines, validation labels, and internal terms when they are useful, but the captain-facing chat summary that points to the report still follows this translation rule.
+The native Pi `firstmate-escalation-relay` custom message is the narrow transport exception: it may preserve a stable worker identity, structured key and exact escalation note so the triggered handling turn cannot lose decision or blocker content.
+The assistant reply that follows still translates that evidence under the normal captain-facing rule; `docs/watcher-continuity.md` owns the relay mechanics.
 
 Every escalation must stand alone and remain concise.
 Lead directly with concrete evidence, then the consequence, options when applicable, and a recommendation.
@@ -445,7 +447,7 @@ If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if t
 The generated Herdr contract must use a named non-`default` isolated lab and its guarded helper for every lifecycle action.
 
 Load `secondmate-provisioning` before creating or using a charter brief and preserve its idle-by-default and marked-return-channel contracts.
-Status appends are sparse supervisor-actionable events, not routine progress; `bin/fm-classify-lib.sh` owns keyed open and resolved semantics.
+Status appends are sparse supervisor-actionable events, not routine progress; `bin/fm-classify-lib.sh` owns keyed open and resolved semantics plus the structured decision and blocker line format emitted into new briefs.
 The scaffold is a safety contract, not a suggestion.
 
 ## 12. Self-update

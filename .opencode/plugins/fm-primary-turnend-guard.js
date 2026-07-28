@@ -47,11 +47,11 @@ function runGuard(root) {
   return runProcess(`${root}/bin/fm-turnend-guard.sh`, [], '{"stop_hook_active":false}');
 }
 
-async function letWatchArmRun(sessionID, client) {
+async function coordinatorDeliveredWake(sessionID, client) {
   const coordinator = globalThis[COORDINATOR_KEY];
   if (!coordinator?.ensureArmed) return false;
   const status = await coordinator.ensureArmed(sessionID, client);
-  return status === "armed" || status === "wake" || status === "failed";
+  return status === "wake";
 }
 
 export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => {
@@ -69,7 +69,7 @@ export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => 
       const sessionID = event.properties?.sessionID;
       if (!sessionID) return;
 
-      if (await letWatchArmRun(sessionID, client)) return;
+      if (await coordinatorDeliveredWake(sessionID, client)) return;
 
       const result = await runGuard(root);
       if (result.code !== 2) return;
@@ -78,8 +78,7 @@ export const FmPrimaryTurnendGuard = async ({ client, directory, worktree }) => 
         const text = await encodeFirstmateOperationalInput(
           root,
           "turn-end-guard",
-          "TURN WOULD END BLIND - supervision is off. " +
-            "The watcher cycle is missing, failed, or unhealthy. Follow the harness recovery instruction below before ending the turn.\n\n" +
+          "TURN END REFUSED - follow the concrete instruction below before ending the turn.\n\n" +
             result.stderr,
         );
         await client.session.promptAsync({

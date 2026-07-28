@@ -61,10 +61,11 @@ An ordinary user prompt may quote or reuse watcher, guard, startup, or superviso
 
 `.pi/extensions/lib/fm-calm-visibility.ts` owns the allowlist-style transcript policy and delivery into Pi's structured hidden context entries.
 `bin/fm-operational-input.sh` owns current cross-language operational-input construction and parsing, while the thin Pi adapter lives at `.pi/extensions/lib/fm-operational-input.ts`.
-Only `genuine-user-prompt` and `genuine-agent-response` are policy-visible.
+Only `genuine-user-prompt` and `genuine-agent-response` are generally policy-visible.
+The native `firstmate-escalation-relay` custom message is a narrow safety exception that remains visible so an exact decision or blocker cannot disappear during its triggered handling turn; `docs/watcher-continuity.md` owns its transport mechanics.
 Every other audited class is policy-hidden even when Pi currently lacks a supported renderer for enforcing that result.
 
-Current session-start, watcher, turn-end guard, away supervisor, and launch-brief inputs use the versioned kind carried after the landed U+2063 `FIRSTMATE_OP: ` prefix.
+Current session-start, ordinary watcher, turn-end guard, away supervisor, and launch-brief inputs use the versioned kind carried after the landed U+2063 `FIRSTMATE_OP: ` prefix.
 The established leading `[fm-from-firstmate]` plus U+2063 routing carrier remains current and is parsed as `from-firstmate` through the same owner so running secondmate charters remain compatible.
 Pi persists the resulting exact kind in both the presentation entry and the non-displayed context message.
 A landed untyped `FIRSTMATE_OP` input is retained as `legacy-operational` rather than having a subtype inferred from its body.
@@ -96,7 +97,7 @@ The test fixture enumerates every class below through the centralized policy, an
 | `tool-image` | Image children appended outside tool renderer slots | Unsupported boundary; remains visible. |
 | `user-bash` | `BashExecutionComponent` for `!` and `!!` | Unsupported boundary; remains visible. |
 | `skill-invocation` | `SkillInvocationMessageComponent` plus parsed user text | Unsupported boundary; remains visible. |
-| `custom-message` | `CustomMessageComponent` when `display` is true | Firstmate's known synthetic context messages use `display: false`; arbitrary extension messages remain an unsupported boundary. |
+| `custom-message` | `CustomMessageComponent` when `display` is true | Ordinary Firstmate synthetic context messages use `display: false`; the native `firstmate-escalation-relay` is the deliberate visible safety exception owned by `docs/watcher-continuity.md`, and arbitrary extension messages remain an unsupported boundary. |
 | `custom-entry` | `CustomEntryComponent` with a registered renderer | Firstmate's synthetic presentation entry is mounted synchronously, rebuilt to zero children without a residual spacer, and restored by the ordinary expansion redraw; arbitrary extension entries remain an unsupported boundary. |
 | `compaction-summary` | `CompactionSummaryMessageComponent` | Unsupported boundary; remains visible. |
 | `branch-summary` | `BranchSummaryMessageComponent` | Unsupported boundary; remains visible. |

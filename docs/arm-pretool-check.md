@@ -24,7 +24,7 @@ Ordinary shell commands, fleet-script names used as data, all commands in an idl
 The denial gives Claude reason-specific recovery guidance — drain, steer via `bin/fm-send.sh`, re-arm via a tracked Claude background task, and use fail-closed `bin/fm-teardown.sh` for completed tasks — per the contract in [`watcher-continuity.md`](watcher-continuity.md).
 `bin/fm-continuity-command-policy.mjs` reuses this document's shell lexer and command-position analysis but owns the allowed-versus-other-fleet classification.
 Malformed transport or opaque dynamic syntax fails open so this narrow gate cannot become a blanket Bash block.
-The existing `bin/fm-turnend-guard.sh` Stop integration is unchanged and remains the final backstop.
+The separate `bin/fm-turnend-guard.sh` Stop integration remains the final backstop.
 
 The classifier never executes, sources, evaluates, or expands any part of the submitted command.
 It tokenizes the bytes and classifies lexical execution positions only.

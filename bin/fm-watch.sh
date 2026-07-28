@@ -587,6 +587,21 @@ heartbeat_scan_finds_actionable() {
   return 1
 }
 
+# Print unsurfaced status files whose whole-stream fold still contains an open
+# decision or blocker. The heartbeat backstop promotes these to an ordinary
+# signal wake so the same exact-content relay path handles a missed status edge;
+# done/failed and other ordinary heartbeat findings remain heartbeat wakes.
+heartbeat_unsurfaced_escalation_files() {
+  local f task last surfaced
+  while IFS=$(printf '\t') read -r f task last; do
+    [ -n "$f" ] || continue
+    surfaced=$(cat "$(_hb_surfaced_path "$task")" 2>/dev/null || true)
+    [ "$surfaced" = "$last" ] && continue
+    [ -n "$(status_open_decisions "$f")" ] || continue
+    printf '%s\n' "$f"
+  done < <(scan_captain_relevant_statuses "$STATE")
+}
+
 # event_wait_or_sleep: the terminal wait of each supervision cycle. For a home
 # with push-capable windows (herdr), it replaces the blind `sleep POLL` with a
 # bounded wait on the backend's native transition stream, so a crew going
@@ -839,7 +854,12 @@ while :; do
     done <<EOF
 $pending
 EOF
-    reason="signal:$files"
+    # Carry every still-open decision or blocker in the watcher output and each
+    # durable queue payload. The compact v1 tokens are owned by
+    # bin/fm-classify-lib.sh and preserve the exact status note for active chat
+    # bridges without making an internal status path the only wake content.
+    # shellcheck disable=SC2086 # $files is the validated space-separated signal list.
+    reason="signal:$files$(signal_escalation_tokens $files)"
     # Triage: a signal is ACTIONABLE when any of these holds (cheapest first):
     #   - the away-mode daemon owns triage (afk) and wants every wake;
     #   - any status file carries a captain-relevant verb;
@@ -1056,6 +1076,21 @@ EOF
       wake "heartbeat"
     elif heartbeat_scan_finds_actionable; then
       # Backstop: a captain-relevant status the per-wake path absorbed by mistake.
+      # An open decision or blocker is promoted to the same exact-content signal
+      # path as a direct edge. Ordinary done/failed findings remain heartbeat
+      # wakes, so a heartbeat never becomes a captain escalation by itself.
+      escalation_files=$(heartbeat_unsurfaced_escalation_files)
+      if [ -n "$escalation_files" ]; then
+        files=$(printf '%s\n' "$escalation_files" | tr '\n' ' ')
+        # shellcheck disable=SC2086 # $files is a validated status-path list.
+        reason="signal: $files$(signal_escalation_tokens $files)"
+        for f in $files; do
+          fm_wake_append signal "$(basename "$f")" "$reason" || exit 1
+        done
+        touch "$STATE/.last-heartbeat"
+        mark_all_captain_relevant_surfaced
+        wake "$reason"
+      fi
       # Enqueue first, then mark every captain-relevant status surfaced so the next
       # heartbeat does not re-fire them (enqueue-before-suppress preserved).
       fm_wake_append heartbeat heartbeat heartbeat || exit 1
