@@ -10,7 +10,7 @@
 # It resolves the task's worktree and Git metadata before entering the cage,
 # grants only the exact Firstmate lifecycle paths named by the caller, and
 # rebuilds the environment from a non-secret allowlist.
-# The Seatbelt profile permits the signed Codex native process to read its own
+# The Seatbelt profile permits the discovered Codex native process to read its own
 # CODEX_HOME and one exact resolved canonical global-rules file so startup and
 # ChatGPT authentication work, but model-launched child processes have a
 # different executable path and cannot read either protected surface.

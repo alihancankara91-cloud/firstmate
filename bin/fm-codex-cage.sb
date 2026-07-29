@@ -57,7 +57,7 @@
   (literal notify-path)
   (subpath cage-tmp))
 
-;; Only the signed Codex native process may load its user configuration,
+;; Only the discovered Codex native process may load its user configuration,
 ;; authentication store, and the one exact resolved canonical global-rules
 ;; file discovered by the wrapper.
 ;; Model-launched shells inherit the cage but have a different process path, so

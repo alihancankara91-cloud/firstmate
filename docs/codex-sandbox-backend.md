@@ -37,8 +37,8 @@ The environment is rebuilt from a non-secret allowlist rather than inherited fro
 Seatbelt denies by default and then grants these task capabilities:
 
 - System runtimes, developer tools, the Codex installation, the task worktree, its Git metadata, the exact task data directory, exact lifecycle files, and the cage's private temporary directory are readable.
-- Only the signed native Codex process can read and write `CODEX_HOME`, so Codex can authenticate while model-launched shells cannot read its credential store.
-- That native process may also read the one exact canonical global-rules file resolved from the approved aliases, without receiving directory or write access.
+- Only the discovered native Codex executable can read and write `CODEX_HOME`, so Codex can authenticate while model-launched shells cannot read its credential store.
+- For a resolved rules file outside `CODEX_HOME`, that native process receives only exact-file read access, with no containing-directory or write grant.
 - Writes are limited to the task worktree, its Git metadata, `data/<id>`, the exact `state/<id>.status`, the exact turn-end file, and the cage's private temporary directory.
 - Outbound internet access remains available for Codex and public Git operations.
 - Every loopback TCP destination is denied, including already-running Chrome remote-debugging ports.
@@ -137,7 +137,7 @@ The same launch also preserved disconfirming evidence that shell-snapshot valida
 
 The wrapper now resolves only `~/AGENTS.md`, `$CODEX_HOME/AGENTS.md`, and `~/.agents.md`, requires every present alias to resolve to the same approved canonical file, and refuses broken, non-regular, unreadable, conflicting, or outside targets.
 The Seatbelt profile grants only the native Codex executable read and existence checks for that exact resolved file.
-It does not grant the containing directory or write access, and model-launched child shells still receive an operating-system denial for the same file.
+For the affected external `~/.claude/CLAUDE.md` target, it does not grant the containing directory or write access, and model-launched child shells still receive an operating-system denial for the same file.
 
 The focused verification commands were:
 
