@@ -78,11 +78,14 @@ SH
 write_meta() {
   local case_dir=$1 mode=$2 kind=$3
   fm_write_meta "$case_dir/state/task-x1.meta" \
-    "window=fm-task-x1" \
+    "window=firstmate:fm-task-x1" \
+    "endpoint_task_id=task-x1" \
     "worktree=$case_dir/wt" \
     "project=$case_dir/project" \
+    "harness=claude" \
     "kind=$kind" \
-    "mode=$mode"
+    "mode=$mode" \
+    "yolo=off"
 }
 
 wt_commit_file() {
@@ -647,11 +650,14 @@ test_scout_teardown_records_delivery_and_unblocks_requires() {
 ## Done
 EOF
   fm_write_meta "$case_dir/state/task-x1.meta" \
-    "window=fm-task-x1" \
+    "window=firstmate:fm-task-x1" \
+    "endpoint_task_id=task-x1" \
     "worktree=$case_dir/wt" \
     "project=$case_dir/project" \
+    "harness=claude" \
     "kind=scout" \
     "mode=scout" \
+    "yolo=off" \
     "decisions_reviewed=1"
   mkdir -p "$case_dir/data/task-x1"
   printf '# findings\n' > "$case_dir/data/task-x1/report.md"

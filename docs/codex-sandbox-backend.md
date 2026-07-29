@@ -104,8 +104,8 @@ The cage remained mandatory and the TUI's normal warnings for separately denied 
 The retained permitted host-lane command was:
 
 ```sh
-fm_home=/Users/ackinvestment/firstmate
-worktree=/Users/ackinvestment/.treehouse/firstmate-3aecb2/2/firstmate
+fm_home=/path/to/firstmate
+worktree=/path/to/isolated-worktree
 task_data_dir="$fm_home/data/fm-codex-cage-launch-regression"
 status_path="$fm_home/state/fm-codex-cage-launch-regression.status"
 notify_path="$fm_home/state/fm-codex-cage-launch-regression.turn-ended"
@@ -166,9 +166,9 @@ This is equivalent to the real spawn because `/usr/bin/expect` supplied the same
 The three aliases on the affected host had this exact topology:
 
 ```text
-/Users/ackinvestment/AGENTS.md -> /Users/ackinvestment/.claude/CLAUDE.md
-/Users/ackinvestment/.codex/AGENTS.md -> /Users/ackinvestment/.claude/CLAUDE.md
-/Users/ackinvestment/.agents.md -> /Users/ackinvestment/.claude/CLAUDE.md
+<home>/AGENTS.md -> <home>/.claude/CLAUDE.md
+<home>/.codex/AGENTS.md -> <home>/.claude/CLAUDE.md
+<home>/.agents.md -> <home>/.claude/CLAUDE.md
 ```
 
 The deterministic reproduction created a synthetic home with `.codex/AGENTS.md -> ../.claude/CLAUDE.md` and ran this exact fixture and probe:
@@ -213,7 +213,7 @@ The exact baseline output was:
 
 ```text
 uncaged=SYNTHETIC_CANONICAL_RULES
-caged-external-target-exit=1 output=head: /Users/ackinvestment/.treehouse/firstmate-3aecb2/2/firstmate/.fm-cage-repro.PlR5na/home/.codex/AGENTS.md: Operation not permitted
+caged-external-target-exit=1 output=head: <isolated-worktree>/.fm-cage-repro.PlR5na/home/.codex/AGENTS.md: Operation not permitted
 ```
 
 The smallest counterfactual changed only the symlink target to a file below the same synthetic `CODEX_HOME`.
@@ -225,7 +225,7 @@ smallest-counterfactual-exit=0 output=SYNTHETIC_IN_HOME_RULES
 
 That comparison identifies the earliest relevant denial as the resolved external target rather than the alias or Codex executable.
 A current-base `codex exec` launch did not reproduce the previously reported immediate process exit.
-It started successfully but emitted `warning: Failed to read global AGENTS.md instructions from /Users/ackinvestment/.codex/AGENTS.md: Operation not permitted (os error 1)`.
+It started successfully but emitted `warning: Failed to read global AGENTS.md instructions from <home>/.codex/AGENTS.md: Operation not permitted (os error 1)`.
 The earliest denial in that current Codex startup log was the `.agents/skills` directory, before the global-rules warning.
 That denial remained after the fix while Codex started successfully, disproving it as the cause of the global-rules read failure.
 The same launch also preserved disconfirming evidence that shell-snapshot validation and the project hooks configuration were denied independently, so those surfaces were not opened as part of this fix.
@@ -241,9 +241,9 @@ tests/fm-codex-cage.test.sh
 FM_CODEX_CAGE_LIVE_E2E=1 tests/fm-codex-cage-live-e2e.test.sh
 bin/fm-codex-cage.sh \
   --worktree "$PWD" \
-  --task-data-dir /Users/ackinvestment/firstmate/data/fm-codex-cage-global-rules-symlink \
-  --status-path /Users/ackinvestment/firstmate/state/fm-codex-cage-global-rules-symlink.status \
-  --fm-home /Users/ackinvestment/firstmate \
+  --task-data-dir /path/to/firstmate/data/fm-codex-cage-global-rules-symlink \
+  --status-path /path/to/firstmate/state/fm-codex-cage-global-rules-symlink.status \
+  --fm-home /path/to/firstmate \
   -- codex exec --ephemeral --skip-git-repo-check \
     --dangerously-bypass-approvals-and-sandbox 'Reply exactly CAGE_STARTED.'
 ```
