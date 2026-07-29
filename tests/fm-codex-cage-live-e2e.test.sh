@@ -106,6 +106,7 @@ TLS_OUTPUT=$(
       -D "NOTIFY_PATH=$TURNEND" \
       -D "CAGE_TMP=$TLS_TMP" \
       -D "CODEX_HOME=$REPO" \
+      -D "GLOBAL_RULES_FILE=/dev/null" \
       -D "TLS_TRUST_DIR=/private/etc/ssl" \
       -D "CODEX_NATIVE=/usr/bin/curl" \
       -D "CODEX_INSTALL_ROOT=/usr/bin" \

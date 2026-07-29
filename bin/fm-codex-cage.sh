@@ -11,8 +11,9 @@
 # grants only the exact Firstmate lifecycle paths named by the caller, and
 # rebuilds the environment from a non-secret allowlist.
 # The Seatbelt profile permits the signed Codex native process to read its own
-# CODEX_HOME so ChatGPT authentication still works, but model-launched child
-# processes have a different executable path and cannot read that directory.
+# CODEX_HOME and one exact resolved canonical global-rules file so startup and
+# ChatGPT authentication work, but model-launched child processes have a
+# different executable path and cannot read either protected surface.
 # The no-mistakes daemon remains reachable only through its exact Unix socket;
 # every loopback TCP destination, including Chrome debugging ports, is denied.
 set -eu
@@ -48,12 +49,14 @@ canonical_file_target() {
 }
 
 resolve_symlinks() {
-  local target=$1 link parent
+  local target=$1 link parent hops=0
   case "$target" in
     /*) ;;
     *) target="$PWD/$target" ;;
   esac
   while [ -L "$target" ]; do
+    hops=$((hops + 1))
+    [ "$hops" -le 40 ] || die "too many symbolic links while resolving: $1"
     link=$(readlink "$target")
     case "$link" in
       /*) target=$link ;;
@@ -70,6 +73,39 @@ resolve_symlinks() {
 path_is_within() {
   local parent=$1 child=$2
   [ "$child" = "$parent" ] || [ "${child#"$parent"/}" != "$child" ]
+}
+
+is_approved_global_rules_target() {
+  local home=$1 codex_home=$2 target=$3
+  case "$target" in
+    "$home/AGENTS.md"|"$home/.agents.md"|"$home/.claude/CLAUDE.md"|\
+      "$codex_home/AGENTS.md") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+discover_global_rules_file() {
+  local home=$1 codex_home=$2 alias target resolved=
+  for alias in \
+    "$home/AGENTS.md" \
+    "$codex_home/AGENTS.md" \
+    "$home/.agents.md"; do
+    if [ ! -e "$alias" ] && [ ! -L "$alias" ]; then
+      continue
+    fi
+    target=$(resolve_symlinks "$alias")
+    is_approved_global_rules_target "$home" "$codex_home" "$target" \
+      || die "global rules target is outside the approved canonical locations: $alias -> $target"
+    [ -f "$target" ] \
+      || die "global rules target is missing or not a regular file: $alias -> $target"
+    [ -r "$target" ] \
+      || die "global rules target is not readable: $alias -> $target"
+    if [ -n "$resolved" ] && [ "$resolved" != "$target" ]; then
+      die "global rules aliases resolve to conflicting files: $resolved and $target"
+    fi
+    resolved=$target
+  done
+  printf '%s\n' "${resolved:-/dev/null}"
 }
 
 discover_codex_native() {
@@ -221,6 +257,7 @@ HOME_VALUE=${HOME:-}
 HOME_VALUE=$(canonical_dir "$HOME_VALUE")
 CODEX_HOME_VALUE=${CODEX_HOME:-"$HOME_VALUE/.codex"}
 CODEX_HOME_VALUE=$(canonical_dir "$CODEX_HOME_VALUE")
+GLOBAL_RULES_FILE=$(discover_global_rules_file "$HOME_VALUE" "$CODEX_HOME_VALUE")
 
 GIT_DIR=$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-dir 2>/dev/null) \
   || die "worktree is not a Git worktree: $WORKTREE"
@@ -314,6 +351,7 @@ set +e
     -D "NOTIFY_PATH=$NOTIFY_PATH" \
     -D "CAGE_TMP=$CAGE_TMP" \
     -D "CODEX_HOME=$CODEX_HOME_VALUE" \
+    -D "GLOBAL_RULES_FILE=$GLOBAL_RULES_FILE" \
     -D "TLS_TRUST_DIR=$TLS_TRUST_DIR" \
     -D "CODEX_NATIVE=$CODEX_NATIVE" \
     -D "CODEX_INSTALL_ROOT=$CODEX_INSTALL_ROOT" \
