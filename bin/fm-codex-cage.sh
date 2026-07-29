@@ -11,9 +11,11 @@
 # grants only the exact Firstmate lifecycle paths named by the caller, and
 # rebuilds the environment from a non-secret allowlist.
 # The Seatbelt profile permits the discovered Codex native process to read its own
-# CODEX_HOME and one exact resolved canonical global-rules file so startup and
-# ChatGPT authentication work, but model-launched child processes have a
-# different executable path and cannot read either protected surface.
+# CODEX_HOME and one exact resolved canonical global-rules file, and to issue
+# terminal ioctls only against its exact controlling terminal, so startup and
+# ChatGPT authentication work.
+# Model-launched child processes have a different executable path and cannot use
+# those protected allowances.
 # The no-mistakes daemon remains reachable only through its exact Unix socket;
 # every loopback TCP destination, including Chrome debugging ports, is denied.
 set -eu
@@ -153,6 +155,27 @@ safe_optional_file() {
   fi
 }
 
+discover_tty_path() {
+  local tty_path suffix
+  if ! tty_path=$(/usr/bin/tty 2>/dev/null); then
+    printf '/dev/null\n'
+    return 0
+  fi
+  suffix=${tty_path#/dev/ttys}
+  case "$tty_path:$suffix" in
+    /dev/ttys*:?*[![:alnum:]]*)
+      die "controlling terminal path is outside the approved macOS PTY namespace: $tty_path"
+      ;;
+    /dev/ttys*:?*)
+      [ -c "$tty_path" ] || die "controlling terminal is not a character device: $tty_path"
+      printf '%s\n' "$tty_path"
+      ;;
+    *)
+      die "controlling terminal path is outside the approved macOS PTY namespace: $tty_path"
+      ;;
+  esac
+}
+
 # shellcheck disable=SC2329  # Invoked indirectly by the traps installed below.
 cleanup() {
   case "${CAGE_TMP:-}" in
@@ -234,6 +257,7 @@ if [ -n "$FM_HOME_VALUE" ]; then
 else
   FM_HOME_VALUE=$WORKTREE
 fi
+TTY_PATH=$(discover_tty_path)
 
 case "$1" in
   */*) CODEX_LAUNCHER=$1 ;;
@@ -353,6 +377,7 @@ set +e
     -D "CODEX_HOME=$CODEX_HOME_VALUE" \
     -D "GLOBAL_RULES_FILE=$GLOBAL_RULES_FILE" \
     -D "TLS_TRUST_DIR=$TLS_TRUST_DIR" \
+    -D "TTY_PATH=$TTY_PATH" \
     -D "CODEX_NATIVE=$CODEX_NATIVE" \
     -D "CODEX_INSTALL_ROOT=$CODEX_INSTALL_ROOT" \
     -D "LOCAL_BIN_DIR=$LOCAL_BIN_DIR" \

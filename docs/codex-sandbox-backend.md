@@ -39,6 +39,7 @@ Seatbelt denies by default and then grants these task capabilities:
 - System runtimes, developer tools, the Codex installation, the task worktree, its Git metadata, the exact task data directory, exact lifecycle files, and the cage's private temporary directory are readable.
 - Only the discovered native Codex executable can read and write `CODEX_HOME`, so Codex can authenticate while model-launched shells cannot read its credential store.
 - For a resolved rules file outside `CODEX_HOME`, that native process receives only exact-file read access, with no containing-directory or write grant.
+- Interactive native Codex receives terminal-control ioctl access only to the exact controlling macOS PTY discovered at launch, while headless launches bind the inert `/dev/null` path and child processes receive no terminal ioctl allowance.
 - Writes are limited to the task worktree, its Git metadata, `data/<id>`, the exact `state/<id>.status`, the exact turn-end file, and the cage's private temporary directory.
 - Outbound internet access remains available for Codex and public Git operations.
 - Every loopback TCP destination is denied, including already-running Chrome remote-debugging ports.
@@ -58,6 +59,59 @@ The investigation used `gh` CLI clones and local Git inspection rather than a br
 - No fetchable cage implementation was present in Kun's inspected public Firstmate, no-mistakes, Treehouse, or dotfiles repositories.
 
 Firstmate therefore matches Kun's public Codex posture and supplies the closest standard macOS implementation for the missing external layer: a deny-first `sandbox-exec` Seatbelt profile.
+
+## Interactive launch regression evidence
+
+- Date: 2026-07-29.
+- Host: macOS 26.5.2.
+- Codex: `codex-cli 0.145.0`.
+- Affected base: merge commit `83acab5`.
+- End-user path: `fm-spawn` launching an interactive Codex scout from a Treehouse worktree.
+- Trigger: interactive Codex TUI initialization issued a `file-ioctl` against its controlling pseudo-terminal while the deny-first profile had no terminal ioctl allowance.
+- Masking condition: the prior acceptance used headless `codex exec`, which does not require the TUI's terminal-control ioctl and therefore passed the full security probe set.
+- Symptom: the TUI emitted its initial bracketed-paste control sequence, printed `Error: Operation not permitted (os error 1)`, and exited immediately.
+
+The one-condition-at-a-time matrix found the earliest divergence at TUI startup rather than at the Treehouse path or any `fm-spawn` argument:
+
+| Step | Single condition introduced | Result |
+|---|---|---|
+| A | Scratch Git directory plus `codex --version` | Exit 0, `codex-cli 0.145.0` |
+| B | Replace the scratch directory with the real Treehouse worktree | Exit 0, so the Treehouse path alone was not the trigger |
+| C | Replace `--version` with headless `codex exec` and no bypass or config overrides | Exit 0 and answered `CAGE_TREEHOUSE_OK` |
+| D | Add `--dangerously-bypass-approvals-and-sandbox` to the headless launch | Exit 0 and answered `CAGE_BYPASS_OK` |
+| E | Replace headless execution with the interactive TUI, retaining bypass but omitting notify, operational input, model, and effort overrides | Immediate operating-system denial in both the scratch directory and Treehouse worktree |
+| F | Add only the notify hook to the passing headless launch | Exit 0, answered `CAGE_NOTIFY_OK`, and created the exact notification file |
+| G | Add only the launch-brief operational-input argument to the passing headless launch | Exit 0 and answered `CAGE_OPINPUT_OK` |
+| H | Add only the `gpt-5.6-sol` model and `high` effort overrides to the passing headless launch | Exit 0 and answered `CAGE_MODEL_OK` |
+
+A temporary diagnostic profile changed one permission at a time under the native Codex process filter.
+Allowing `/dev` reads alone retained the denial, allowing `/dev` writes alone retained the denial, and allowing `/dev` ioctls allowed the TUI to start.
+The production fix does not retain that broad diagnostic scope.
+The wrapper now discovers and validates only its controlling `/dev/ttys<alphanumeric>` character device, passes that exact path into Seatbelt, and the native-process filter grants `file-ioctl` only for that literal path.
+A headless launch passes `/dev/null`, and the regression test proves a model-launched child process still receives an operating-system denial when it attempts the same terminal inspection.
+
+The deterministic regression test uses macOS `expect` to allocate a real PTY and runs the real wrapper twice.
+A fake `codex` symlink to `/bin/stty` proves the native executable can inspect only its controlling terminal, then a fake `codex` symlink to `/bin/zsh` proves its `/bin/stty` child cannot inherit the process-path-filtered ioctl allowance.
+The focused result was:
+
+```text
+ok - only native Codex can inspect the exact controlling terminal while child processes remain denied
+```
+
+The final end-to-end check allocated a PTY from this real Treehouse Firstmate worktree and used the complete `fm-spawn` Codex argument shape: model `gpt-5.6-sol`, effort `high`, bypass mode, the notify hook against its separately bound task state path, and a launch brief encoded by `fm-operational-input.sh`.
+The existing live acceptance separately retained the outside-worktree lifecycle-path checks for task status, report, and turn-end delivery.
+The cage remained mandatory and the TUI's normal warnings for separately denied hooks and MCP startup paths were not opened by this fix.
+The exact outcome summary was:
+
+```text
+turn-ended=true
+answer-present=true
+fatal-startup-denial=false
+outcome=turn-ended
+```
+
+The answer reconstructed from the TUI output was `CAGE_TREEHOUSE_ANSWERED`.
+This is equivalent to the real spawn because `/usr/bin/expect` supplied the same controlling PTY that a supported pane backend supplies, while every cage and Codex argument came from the production launch shape.
 
 ## Global-rules symlink regression evidence
 
@@ -99,6 +153,7 @@ run_probe() {
     -D "CAGE_TMP=$probe_root/cage-tmp" \
     -D "CODEX_HOME=$home/.codex" \
     -D "TLS_TRUST_DIR=/private/etc/ssl" \
+    -D "TTY_PATH=/dev/null" \
     -D "CODEX_NATIVE=/usr/bin/head" \
     -D "CODEX_INSTALL_ROOT=/usr/bin" \
     -D "LOCAL_BIN_DIR=/usr/bin" \
@@ -161,6 +216,7 @@ ok - wrapper rejects missing worktrees and relative lifecycle paths
 ok - wrapper sanitizes the environment and binds only exact task paths
 ok - wrapper refuses missing, unsafe, and conflicting global-rules targets
 ok - only the native process reads the exact rules file while siblings and child shells remain denied
+ok - only native Codex can inspect the exact controlling terminal while child processes remain denied
 ok - public gh helper clones without credentials and rejects authenticated operations
 ok - live harness prints evidence on both paths and preserves failed runs
 ok - both Codex spawn templates require bypass mode inside the external cage
