@@ -1,6 +1,7 @@
 # Codex external sandbox backend
 
-This document records the external operating-system cage Firstmate applies to every Codex crewmate, scout, and secondmate launch.
+This document records the external operating-system cage Firstmate applies to every crewmate, scout, and secondmate launched through the named Codex adapter.
+The raw launch-command escape hatch is for unverified adapters and is outside this guarantee, even when its command happens to invoke `codex`.
 `bin/fm-spawn.sh` owns the launch templates, `bin/fm-codex-cage.sh` owns validation and environment construction, and `bin/fm-codex-cage.sb` owns the macOS Seatbelt policy.
 
 ## Current posture

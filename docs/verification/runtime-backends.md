@@ -91,7 +91,7 @@ Expected submit matrix: proven pending plus busy is accepted as queued; proven p
 
 ### Cleanup endpoint identity
 
-The cleanup identity boundary was validated on 2026-07-28 with tmux 3.6a and metadata fixtures for every supported backend.
+The cleanup identity boundary was validated on 2026-07-29 with tmux 3.6a and metadata fixtures for every supported backend.
 
 ```sh
 tests/fm-teardown-endpoint-safety.test.sh
@@ -106,21 +106,24 @@ Bounded output from the incident regression:
 
 ```text
 ok - fm-teardown: missing, empty, malformed, ambiguous, and task-mismatched endpoints refuse before every mutation or runtime call
-ok - cleanup identity: valid tmux, Herdr, Zellij, Orca, and cmux records validate while every empty backend target refuses
+ok - legacy cleanup identity: exact registered worktrees authenticate recorded and pathless Orca cleanup
+ok - secondmate endpoint identity: Herdr uses the child home while Zellij remains parent-owned
+ok - legacy endpoint identity: owning home is explicit for top-level and recursive cleanup
+ok - cleanup identity: live task-bound and authoritatively absent legacy endpoints migrate while crossed records refuse
 ok - tmux backend: direct empty target returns nonzero without invoking tmux
 ok - process cleanup: creation-time PID identity removes only the exact child and preserves the control child
-ok - fm-teardown: dedicated-socket invalid cleanup preserves target/control and valid cleanup removes only the exact target
+ok - fm-teardown: exact tmux cleanup preserves invalid and prefix-matched neighbors while removing only the recorded target
 ```
 
 The dedicated tmux cell removed ambient tmux variables, required a socket-bound wrapper, kept one target and one independent control window, and proved the wrapper was not called for invalid metadata or a direct empty target.
 Valid cleanup removed only the exact task-bound target and left the control window live.
-The metadata-only validation covers tmux, Herdr, Zellij, Orca, and cmux before backend dispatch.
+Current task-bound records use metadata validation before backend dispatch, while authenticated legacy migration uses exact worktree provenance and owning-container inventories before atomically binding and revalidating the record.
 Claude, Codex, OpenCode, Pi, pi-signed, Grok, and Kimi share that backend cleanup boundary; their harness-specific hook files and token cleanup run only after it, so no harness needs a separate endpoint parser.
 
 ## Herdr
 
 The compatibility floor is protocol 14.
-The latest active verification uses Herdr 0.7.5 protocol 16 on macOS aarch64, with earlier 0.7.4, protocol-14, and 0.7.3 evidence retained where they define current behavior or fallbacks.
+The latest core CLI matrix verification uses Herdr 0.7.5 protocol 16 on macOS aarch64, with earlier 0.7.4, protocol-14, and 0.7.3 evidence retained where they define current behavior or fallbacks.
 
 Core read-only probes:
 

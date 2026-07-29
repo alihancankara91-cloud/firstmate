@@ -78,7 +78,8 @@ Otherwise an exact task id matching `state/<id>.meta` wins before the legacy `fm
 A metadata-routed selector returns the recorded backend target (`terminal=` for Orca, otherwise `window=`), and matching explicit targets can still recover the recorded backend when metadata contains the same endpoint.
 Only metadata-routed task selectors carry secondmate-marker and Codex-harness context; explicit endpoint escape hatches do not.
 These five sentences are the single owner of the task-selector vocabulary; backend guides and other documents point here instead of restating the resolution order.
-`fm-teardown.sh <id>` takes a task id directly and validates the complete current endpoint identity before any runtime dispatch or cleanup mutation.
+`fm-teardown.sh <id>` takes a task id directly and validates a current-schema endpoint identity before backend cleanup dispatch.
+Legacy opaque records instead require the read-only provenance and owning-container proofs below before teardown atomically migrates and validates their current identity.
 Missing, empty, duplicate, malformed, backend-inconsistent, or task-mismatched endpoint records are preserved and refused.
 Legacy tmux metadata remains cleanup-compatible when its exact window name is `fm-<id>`.
 For a legacy opaque record without `endpoint_task_id=`, teardown takes the task's spawn lock and requires its recorded worktree to be a project-registered worktree on exact branch `fm/<id>` or an exact marked secondmate home.

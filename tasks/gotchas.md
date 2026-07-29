@@ -20,7 +20,9 @@
 - Collaboration waits require at least 10000 milliseconds even for a quick mailbox poll.
 - Preserve shell `case` pattern lines without trailing spaces when extending long regression fixture lists.
 - Test stubs that set cross-function output globals need an explicit local read for focused ShellCheck.
-- Invoke focused `tests/*.test.sh` files through Bash or `bin/fm-test-run.sh`; executable bits are not guaranteed for every test file.
+- Always invoke focused `tests/*.test.sh` files through Bash or `bin/fm-test-run.sh`, even when nearby tests run directly; executable bits are not guaranteed for every test file.
 - `gh-axi pr list --fields` exposes only the fields shown by its current help; omit unsupported GitHub CLI field names.
 - In isolated local-test worktrees, treat `no-mistakes axi` reporting an uninitialized repository as a setup probe result and do not initialize the gate outside the worktree-local test scope.
 - Decision-hold completion applies only to investigations with task metadata owned by the active Firstmate home.
+- Put `rg` patterns containing Markdown backticks in single-quoted shell arguments so command construction cannot leave an unmatched double quote.
+- Verify a target document's exact generated Markdown anchor before adding a cross-reference.

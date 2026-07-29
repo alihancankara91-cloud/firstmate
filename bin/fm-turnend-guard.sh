@@ -19,8 +19,8 @@
 # represents an undrained, still-open decision or blocker, even when watcher
 # supervision is healthy.
 # bin/fm-classify-lib.sh owns the status fold and structured escalation format.
-# See docs/turnend-guard.md for the per-harness mechanics, validation evidence,
-# and fail-open tradeoffs.
+# See docs/turnend-guard.md for the per-harness mechanics and fail-open
+# tradeoffs, and docs/verification/supervision.md for active empirical evidence.
 #
 # Ships with TRACKED harness hook files at the repo root, so this file is
 # checked out into every worktree of this repo: the primary checkout, every
