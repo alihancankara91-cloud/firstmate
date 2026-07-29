@@ -325,19 +325,32 @@ fm_backend_cmux_scoped_title() {  # <fm-task-label>
   printf 'fm-%s-%s' "$home" "$rest"
 }
 
+fm_backend_cmux_workspace_inventory() {
+  local wins wid wss batch inventory='[]'
+  wins=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
+  printf '%s' "$wins" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  while IFS= read -r wid; do
+    [ -n "$wid" ] || continue
+    wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$wid" 2>/dev/null) || return 1
+    batch=$(printf '%s' "$wss" | jq -ce 'select((.workspaces | type) == "array") | .workspaces' 2>/dev/null) || return 1
+    inventory=$(jq -cn --argjson current "$inventory" --argjson batch "$batch" '$current + $batch') || return 1
+  done < <(printf '%s' "$wins" | jq -r '.[]? | .id' 2>/dev/null)
+  jq -cn --argjson workspaces "$inventory" '{workspaces: $workspaces}'
+}
+
 # fm_backend_cmux_workspace_id_for_label: the live workspace id whose title
 # equals <label>, or empty. cmux enforces no title uniqueness (finding #6),
 # so this adopts the FIRST match `jq` returns, mirroring herdr's/zellij's own
 # duplicate-check posture.
 fm_backend_cmux_workspace_id_for_label() {  # <label>
-  local label=$1
-  fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null \
-    | jq -r --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null | head -1
+  local label=$1 out
+  out=$(fm_backend_cmux_workspace_inventory) || return 1
+  printf '%s' "$out" | jq -r --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null | head -1
 }
 
 fm_backend_cmux_unique_workspace_id_for_label() {  # <label>
   local label=$1 out
-  out=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null) || return 1
+  out=$(fm_backend_cmux_workspace_inventory) || return 1
   printf '%s' "$out" | jq -e --arg want "$label" \
     '(.workspaces | type) == "array" and ([.workspaces[]? | select(.title == $want)] | length) == 1' \
     >/dev/null 2>&1 || return 1
@@ -371,7 +384,7 @@ fm_backend_cmux_create_task() {  # <label> <cwd>
     echo "error: cmux new-workspace failed for '$title': $out" >&2
     return 1
   }
-  wsid=$(fm_backend_cmux_workspace_id_for_label "$title")
+  wsid=$(fm_backend_cmux_unique_workspace_id_for_label "$title")
   [ -n "$wsid" ] || { echo "error: could not resolve a cmux workspace id for '$title' after creation" >&2; return 1; }
   sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
   [ -n "$sfid" ] || { echo "error: could not resolve the default surface for cmux workspace '$title' ($wsid)" >&2; return 1; }
@@ -417,56 +430,35 @@ fm_backend_cmux_surface_exists() {  # <workspace_id> <surface_id>
 # header for the fresh-surface pitfall this avoids). When the caller knows
 # the owning firstmate task label, refresh stale workspace/surface ids by label.
 fm_backend_cmux_target_ready() {  # <target> [expected-label]
-  local expected_label=${2:-} expected_title title wsid sfid
-  fm_backend_cmux_parse_target "$1" || return 1
+  local expected_label=${2:-} status=0
   if [ -n "$expected_label" ]; then
-    expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
-    title=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null | jq -r --arg id "$FM_BACKEND_CMUX_WORKSPACE" '.workspaces[]? | select(.id == $id) | .title' 2>/dev/null)
-    if [ "$title" = "$expected_title" ]; then
-      fm_backend_cmux_surface_exists "$FM_BACKEND_CMUX_WORKSPACE" "$FM_BACKEND_CMUX_SURFACE" && return 0
-      wsid=$FM_BACKEND_CMUX_WORKSPACE
-    elif [ -n "$title" ]; then
-      return 1
-    else
-      wsid=$(fm_backend_cmux_unique_workspace_id_for_label "$expected_title")
-      [ -n "$wsid" ] || return 1
-    fi
-    sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
-    [ -n "$sfid" ] || return 1
-    FM_BACKEND_CMUX_WORKSPACE=$wsid
-    FM_BACKEND_CMUX_SURFACE=$sfid
-    return 0
+    fm_backend_cmux_task_binding_status "$1" "$expected_label" || status=$?
+    [ "$status" = 0 ] || return 1
+    fm_backend_cmux_parse_target "$FM_BACKEND_CMUX_RESOLVED_TARGET"
+    return
   fi
+  fm_backend_cmux_parse_target "$1" || return 1
   fm_backend_cmux_surface_exists "$FM_BACKEND_CMUX_WORKSPACE" "$FM_BACKEND_CMUX_SURFACE"
 }
 
 fm_backend_cmux_task_binding_status() {  # <target> <expected-label>
-  local target=$1 expected_label=$2 state expected_title windows window_id workspaces scoped_match task_workspace
+  local target=$1 expected_label=$2 state expected_title inventory task_workspace
   local recorded_count=0 scoped_count=0 recorded_scoped_count=0 surface_count replacement_count replacement_surface panes
   FM_BACKEND_CMUX_RESOLVED_TARGET=
   state=$(fm_backend_cmux_ping_state)
   [ "$state" = ok ] || return 1
   fm_backend_cmux_parse_target "$target" || return 1
   expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
-  windows=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
-  printf '%s' "$windows" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
-  while IFS= read -r window_id; do
-    [ -n "$window_id" ] || continue
-    workspaces=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$window_id" 2>/dev/null) || return 1
-    printf '%s' "$workspaces" | jq -e '(.workspaces | type) == "array"' >/dev/null 2>&1 || return 1
-    recorded_count=$((recorded_count + $(printf '%s' "$workspaces" | jq -r --arg id "$FM_BACKEND_CMUX_WORKSPACE" \
-      '[.workspaces[]? | select(.id == $id)] | length' 2>/dev/null)))
-    scoped_count=$((scoped_count + $(printf '%s' "$workspaces" | jq -r --arg expected_name "$expected_title" \
-      '[.workspaces[]? | select(.title == $expected_name)] | length' 2>/dev/null)))
-    recorded_scoped_count=$((recorded_scoped_count + $(printf '%s' "$workspaces" | jq -r \
-      --arg id "$FM_BACKEND_CMUX_WORKSPACE" --arg expected_name "$expected_title" \
-      '[.workspaces[]? | select(.id == $id and .title == $expected_name)] | length' 2>/dev/null)))
-    scoped_match=$(printf '%s' "$workspaces" | jq -r --arg expected_name "$expected_title" \
-      '.workspaces[]? | select(.title == $expected_name) | .id' 2>/dev/null) || return 1
-    [ -z "$scoped_match" ] || task_workspace=$scoped_match
-  done <<EOF
-$(printf '%s' "$windows" | jq -r '.[]? | .id' 2>/dev/null)
-EOF
+  inventory=$(fm_backend_cmux_workspace_inventory) || return 1
+  recorded_count=$(printf '%s' "$inventory" | jq -r --arg id "$FM_BACKEND_CMUX_WORKSPACE" \
+    '[.workspaces[]? | select(.id == $id)] | length' 2>/dev/null) || return 1
+  scoped_count=$(printf '%s' "$inventory" | jq -r --arg expected_name "$expected_title" \
+    '[.workspaces[]? | select(.title == $expected_name)] | length' 2>/dev/null) || return 1
+  recorded_scoped_count=$(printf '%s' "$inventory" | jq -r \
+    --arg id "$FM_BACKEND_CMUX_WORKSPACE" --arg expected_name "$expected_title" \
+    '[.workspaces[]? | select(.id == $id and .title == $expected_name)] | length' 2>/dev/null) || return 1
+  task_workspace=$(printf '%s' "$inventory" | jq -r --arg expected_name "$expected_title" \
+    '.workspaces[]? | select(.title == $expected_name) | .id' 2>/dev/null) || return 1
   if [ "$recorded_count" = 0 ]; then
     [ "$scoped_count" != 0 ] || return 2
     [ "$scoped_count" = 1 ] || return 1
@@ -725,7 +717,7 @@ fm_backend_cmux_list_live() {
   local wss wsid title sfid home prefix plain
   home=$(fm_backend_cmux_home_label)
   prefix="fm-$home-"
-  wss=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null) || return 0
+  wss=$(fm_backend_cmux_workspace_inventory) || return 0
   while IFS=$'\t' read -r wsid title; do
     [ -n "$wsid" ] || continue
     plain=${title#"$prefix"}

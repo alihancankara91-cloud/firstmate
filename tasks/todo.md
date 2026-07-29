@@ -41,3 +41,11 @@
 - [x] Reacquire unique cmux replacement workspaces and surfaces.
 - [x] Add focused regressions and update the runtime contract.
 - [x] Run one focused verification.
+
+# Cmux cross-window cleanup completion
+
+- [x] Reproduce and validate the current-window lookup defect.
+- [x] Centralize all-window workspace inventory.
+- [x] Bind target recovery and removal to the global inventory.
+- [x] Add focused cross-window regression coverage.
+- [x] Run one focused verification.

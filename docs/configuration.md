@@ -88,7 +88,7 @@ A live Herdr endpoint is cleanup-authoritative only inside the owning home's wor
 Herdr secondmate endpoint ownership is derived from its exact marked `home=` for both migration and removal, including nested secondmates.
 Zellij secondmate endpoints remain scoped to the state-owning parent home that spawned them, while their ordinary child tasks use the child home.
 Authoritative absence means the owning-home Herdr task tab, Zellij task tab, or cmux task workspace is absent, not merely that a recorded pane or surface changed.
-Zellij closes an exact scoped task tab despite a stale pane, cmux atomically migrates to one unique scoped replacement workspace and surface before cleanup, and an unresolved live Herdr task tab fails closed.
+Zellij closes an exact scoped task tab despite a stale pane, cmux inventories every window and atomically migrates to one globally unique scoped replacement workspace and surface before cleanup, and an unresolved live Herdr task tab fails closed.
 Only when the owning task container is authoritatively absent does migration record `skip-endpoint` while keeping the proven worktree cleanup usable.
 An unreadable inventory, a live bare Zellij title, or a live crossed or foreign endpoint fails closed without cleanup.
 Orca resolves even an empty legacy `worktree=` from its durable worktree id, applies the normal or pathless recovery proof above, writes the resolved path into the migrated record, and disables terminal cleanup.
