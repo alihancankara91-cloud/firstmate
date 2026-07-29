@@ -6,3 +6,4 @@
 - Distinct-home attribution tests must include the secondmate home marker because the shared home-tag helper uses that marker to distinguish homes sharing one code root.
 - Home-scoped browser path recognition must match canonical home-tag prefixes, not every directory whose unrelated name begins with `browser-`.
 - Running a test definition through `/dev/fd` breaks fixtures that resolve shared helpers relative to the script path, so use the repository test runner.
+- Repository discovery must stay rooted in the current worktree because sibling worktrees are outside the permitted review boundary.

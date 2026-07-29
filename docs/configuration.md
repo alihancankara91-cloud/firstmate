@@ -59,6 +59,7 @@ A cmux spawn additionally version-gates against the installed `cmux` binary's ve
 A backend spawn refusal from a missing dependency, version gate, or unauthenticated socket is terminal for that selected backend; firstmate surfaces it as a blocker instead of silently retrying another backend.
 Task meta records `backend=` only for a non-default backend; an absent `backend=` means `tmux`, preserving existing default-path meta files.
 Every new task records `tasktmp=` for its home-scoped task temp root and `browsertmp=` for the home-scoped `TMPDIR` whose path makes Puppeteer browser profiles attributable during task cleanup and periodic orphan reaping.
+Periodic orphan cleanup preserves every browser claimed by live task metadata and leaves any browser without confident Firstmate attribution running, while reporting retained candidates through the browser reaper output or the watcher's bounded triage log.
 A herdr task additionally records `herdr_session=`, `herdr_workspace_id=`, `herdr_tab_id=`, and `herdr_pane_id=`.
 A zellij task additionally records `zellij_session=`, `zellij_tab_id=`, and `zellij_pane_id=`.
 An Orca task additionally records `orca_worktree_id=` and `terminal=`, with `window=fm-<id>` kept as the shared firstmate alias.

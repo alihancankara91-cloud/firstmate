@@ -6,3 +6,11 @@
 - [x] Close recursive secondmate teardown's post-endpoint race.
 - [x] Add regression coverage.
 - [x] Run focused verification.
+
+# Browser reaper documentation review
+
+- [x] Inspect the target diff and changed contracts.
+- [x] Trace browser cleanup facts to their authoritative owners.
+- [x] Remove the duplicate base metadata inventory from `AGENTS.md`.
+- [x] Document conservative live-task and unattributed-browser retention.
+- [x] Re-read the updated documentation and run documentation checks.
