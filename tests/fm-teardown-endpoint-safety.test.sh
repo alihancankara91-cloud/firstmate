@@ -130,10 +130,10 @@ test_legacy_worktree_provenance() {
   id=legacy-pathless-orca
   orca_project="$dir/orca-project"
   orca_worktree="$dir/orca-worktree"
-  fm_git_worktree "$orca_project" "$orca_worktree" "fm/$id"
+  fm_git_worktree "$orca_project" "$orca_worktree" "fm-$id"
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=fm-$id" "terminal=legacy-terminal" "worktree=" "project=$orca_project" \
-    "backend=orca" "orca_worktree_id=orca-worktree-id"
+    "backend=orca" "orca_recovery=worktree-only" "orca_worktree_id=orca-worktree-id"
   fm_backend_worktree_path() {
     [ "$1:$2" = orca:orca-worktree-id ] || return 1
     printf '%s' "$orca_worktree"
@@ -144,7 +144,38 @@ test_legacy_worktree_provenance() {
   assert_grep "endpoint_task_id=$id" "$dir/home/state/$id.meta" "pathless Orca migration omitted task binding"
   assert_grep "legacy_endpoint_cleanup=skip-terminal" "$dir/home/state/$id.meta" "pathless Orca migration did not suppress terminal cleanup"
   [ -z "$FM_BACKEND_VALIDATED_TARGET" ] || fail "pathless Orca migration retained a terminal cleanup target"
+
+  id=legacy-pathless-crossed
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "worktree=" "project=$orca_project" \
+    "backend=orca" "orca_recovery=worktree-only" "orca_worktree_id=orca-worktree-id"
+  ! fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" "$dir/home" "$ROOT" 2>/dev/null \
+    || fail "pathless Orca recovery accepted another task's native fm-<id> worktree"
   pass "legacy cleanup identity: exact registered worktrees authenticate recorded and pathless Orca cleanup"
+}
+
+test_secondmate_endpoint_ownership_uses_marked_home() {
+  local dir id=secondmate-owner
+  dir=$(make_case secondmate-endpoint-home)
+  printf '%s\n' "$id" > "$dir/home/.fm-secondmate-home"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:w1:p2" "endpoint_task_id=$id" "worktree=$dir/home" "project=$dir/project" \
+    "kind=secondmate" "home=$dir/home" "backend=herdr" \
+    "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-backend.sh"
+  fm_backend_task_endpoint_ownership "$dir/home/state/$id.meta" "$id" "$ROOT" "$ROOT" \
+    || fail "marked secondmate endpoint ownership was not authenticated"
+  [ "$FM_BACKEND_ENDPOINT_OWNING_HOME" = "$(cd "$dir/home" && pwd -P)" ] \
+    || fail "secondmate endpoint ownership retained the primary home"
+  [ "$FM_BACKEND_ENDPOINT_OWNING_ROOT" = "$(cd "$dir/home" && pwd -P)" ] \
+    || fail "secondmate endpoint ownership retained the primary root"
+  printf 'other-owner\n' > "$dir/home/.fm-secondmate-home"
+  ! fm_backend_task_endpoint_ownership "$dir/home/state/$id.meta" "$id" "$ROOT" "$ROOT" \
+    || fail "secondmate endpoint ownership accepted a crossed home marker"
+  assert_contains "$(<"$ROOT/bin/fm-teardown.sh")" "\$ENDPOINT_HOME\" \"\$ENDPOINT_ROOT" \
+    "top-level teardown does not pass authenticated endpoint ownership to removal"
+  pass "secondmate endpoint identity: validation and removal use the exact marked home"
 }
 
 test_legacy_endpoint_status_uses_owning_home() {
@@ -468,6 +499,7 @@ SH
 
 test_invalid_endpoint_records_refuse_before_mutation
 test_legacy_worktree_provenance
+test_secondmate_endpoint_ownership_uses_marked_home
 test_legacy_endpoint_status_uses_owning_home
 test_supported_backend_endpoint_records_validate
 test_tmux_empty_target_refuses_without_invocation

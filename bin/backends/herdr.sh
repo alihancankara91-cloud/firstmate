@@ -1684,32 +1684,45 @@ fm_backend_herdr_workspace_binding_matches() {  # <session> <workspace> <expecte
 
 fm_backend_herdr_task_binding_status() {  # <session> <workspace> <tab> <pane> <workspace-label> <task-label>
   local session=$1 workspace=$2 tab=$3 pane=$4 workspace_label=$5 task_label=$6
-  local list tabs panes workspace_count pane_count tuple_count
+  local list tabs panes workspace_count owning_count owning_workspace task_count pane_count tuple_count
   list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
   printf '%s' "$list" | jq -e '(.result.workspaces | type) == "array"' >/dev/null 2>&1 || return 1
   workspace_count=$(printf '%s' "$list" | jq -r --arg workspace "$workspace" \
     '[.result.workspaces[]? | select(.workspace_id == $workspace)] | length' 2>/dev/null) || return 1
-  [ "$workspace_count" != 0 ] || return 2
-  [ "$workspace_count" = 1 ] || return 1
-  printf '%s' "$list" | jq -e --arg workspace "$workspace" --arg expected_name "$workspace_label" '
-    ([.result.workspaces[]? | select(.workspace_id == $workspace and .label == $expected_name)] | length) == 1
-    and ([.result.workspaces[]? | select(.label == $expected_name)] | length) == 1
-  ' >/dev/null 2>&1 || return 1
-  tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$workspace" 2>/dev/null) || return 1
+  [ "$workspace_count" -le 1 ] || return 1
+  owning_count=$(printf '%s' "$list" | jq -r --arg expected_name "$workspace_label" \
+    '[.result.workspaces[]? | select(.label == $expected_name)] | length' 2>/dev/null) || return 1
+  [ "$owning_count" -le 1 ] || return 1
+  if [ "$owning_count" = 0 ]; then
+    [ "$workspace_count" = 0 ] && return 2
+    return 1
+  fi
+  owning_workspace=$(printf '%s' "$list" | jq -r --arg expected_name "$workspace_label" \
+    '.result.workspaces[]? | select(.label == $expected_name) | .workspace_id' 2>/dev/null) || return 1
+  tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$owning_workspace" 2>/dev/null) || return 1
   printf '%s' "$tabs" | jq -e '(.result.tabs | type) == "array"' >/dev/null 2>&1 || return 1
+  task_count=$(printf '%s' "$tabs" | jq -r --arg expected_name "$task_label" \
+    '[.result.tabs[]? | select(.label == $expected_name)] | length' 2>/dev/null) || return 1
+  if [ "$task_count" = 0 ]; then
+    [ "$workspace_count" = 0 ] && return 2
+    [ "$owning_workspace" = "$workspace" ] && return 2
+    return 1
+  fi
+  [ "$task_count" = 1 ] || return 1
+  [ "$workspace_count" = 1 ] && [ "$owning_workspace" = "$workspace" ] || return 1
+  printf '%s' "$tabs" | jq -e --arg tab_ref "$tab" --arg expected_name "$task_label" \
+    '([.result.tabs[]? | select(.tab_id == $tab_ref and .label == $expected_name)] | length) == 1' \
+    >/dev/null 2>&1 || return 1
   panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$workspace" 2>/dev/null) || return 1
   printf '%s' "$panes" | jq -e '(.result.panes | type) == "array"' >/dev/null 2>&1 || return 1
   pane_count=$(printf '%s' "$panes" | jq -r --arg pane "$pane" \
     '[.result.panes[]? | select(.pane_id == $pane)] | length' 2>/dev/null) || return 1
-  [ "$pane_count" != 0 ] || return 2
+  [ "$pane_count" != 0 ] || return 1
   [ "$pane_count" = 1 ] || return 1
   tuple_count=$(printf '%s' "$panes" | jq -r --arg pane "$pane" --arg tab "$tab" \
     '[.result.panes[]? | select(.pane_id == $pane and .tab_id == $tab)] | length' 2>/dev/null) || return 1
   [ "$tuple_count" = 1 ] || return 1
-  printf '%s' "$tabs" | jq -e --arg tab_ref "$tab" --arg expected_name "$task_label" '
-    ([.result.tabs[]? | select(.tab_id == $tab_ref and .label == $expected_name)] | length) == 1
-    and ([.result.tabs[]? | select(.label == $expected_name)] | length) == 1
-  ' >/dev/null 2>&1
+  return 0
 }
 
 # fm_backend_herdr_current_path: the live FOREGROUND process's cwd, or empty on

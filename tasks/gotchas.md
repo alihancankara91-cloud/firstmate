@@ -15,3 +15,5 @@
 - New multi-branch shell helpers must end successful paths explicitly with zero so `set -e` test runners do not inherit a predicate's incidental status.
 - Preserve backend-specific child cleanup call sequences when home scoping is already correct; extend only the backend missing the ownership context.
 - Focused lint includes informational ShellCheck findings, so test assertions containing literal shell expansions must escape them and dynamic test overrides need local lint annotations.
+- Keep workflow-ledger hunks out of multi-file source patches because stale task text otherwise rejects every unrelated hunk atomically.
+- Producer-side output globals need an explicit local read so focused ShellCheck recognizes their cross-file consumers.

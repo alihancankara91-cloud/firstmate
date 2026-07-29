@@ -433,7 +433,7 @@ fm_backend_cmux_target_ready() {  # <target> [expected-label]
 
 fm_backend_cmux_task_binding_status() {  # <target> <expected-label>
   local target=$1 expected_label=$2 state expected_title windows window_id workspaces
-  local recorded_count=0 scoped_count=0 recorded_scoped_count=0 surface_count panes
+  local recorded_count=0 scoped_count=0 recorded_scoped_count=0 surface_count replacement_count panes
   state=$(fm_backend_cmux_ping_state)
   [ "$state" = ok ] || return 1
   fm_backend_cmux_parse_target "$target" || return 1
@@ -463,10 +463,11 @@ EOF
   printf '%s' "$panes" | jq -e '(.panes | type) == "array"' >/dev/null 2>&1 || return 1
   surface_count=$(printf '%s' "$panes" | jq -r --arg surface "$FM_BACKEND_CMUX_SURFACE" \
     '[.panes[]? | select(.surface_ids // [] | index($surface))] | length' 2>/dev/null) || return 1
-  [ "$surface_count" = 1 ] || {
-    [ "$surface_count" = 0 ] && return 2
-    return 1
-  }
+  [ "$surface_count" -le 1 ] || return 1
+  [ "$surface_count" = 1 ] && return 0
+  replacement_count=$(printf '%s' "$panes" | jq -r \
+    '[.panes[]? | (.surface_ids // [])[]?] | unique | length' 2>/dev/null) || return 1
+  [ "$replacement_count" = 1 ]
 }
 
 # fm_backend_cmux_current_path: the live foreground process's cwd, or empty on

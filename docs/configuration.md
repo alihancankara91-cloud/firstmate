@@ -82,10 +82,14 @@ These five sentences are the single owner of the task-selector vocabulary; backe
 Missing, empty, duplicate, malformed, backend-inconsistent, or task-mismatched endpoint records are preserved and refused.
 Legacy tmux metadata remains cleanup-compatible when its exact window name is `fm-<id>`.
 For a legacy opaque record without `endpoint_task_id=`, teardown takes the task's spawn lock and requires its recorded worktree to be a project-registered worktree on exact branch `fm/<id>` or an exact marked secondmate home.
+Pathless pre-launch Orca recovery instead requires `orca_recovery=worktree-only`, resolves the durable Orca worktree id to its exact project-registered path, and requires Orca's native pre-launch `fm-<id>` branch identity.
 A live Herdr endpoint is cleanup-authoritative only inside the owning home's workspace or through an exact version-2 presentation journal, while Zellij and cmux require the owning home's scoped title.
-If an authoritative backend inventory proves the recorded Herdr, Zellij, or cmux endpoint is absent, migration records `skip-endpoint` and preserves endpoint state while keeping the proven worktree cleanup usable.
+Secondmate endpoint ownership is derived from its exact marked `home=` for both migration and removal, including nested secondmates.
+Authoritative absence means the owning-home Herdr task tab, Zellij task tab, or cmux task workspace is absent, not merely that a recorded pane or surface changed.
+Zellij closes an exact scoped task tab despite a stale pane, cmux safely reacquires one replacement surface before closing an exact scoped workspace, and an unresolved live Herdr task tab fails closed.
+Only when the owning task container is authoritatively absent does migration record `skip-endpoint` while keeping the proven worktree cleanup usable.
 An unreadable inventory, a live bare Zellij title, or a live crossed or foreign endpoint fails closed without cleanup.
-Orca resolves even an empty legacy `worktree=` from its durable worktree id, requires that resolved path to be the exact project-registered `fm/<id>` worktree, writes the resolved path into the migrated record, and disables terminal cleanup.
+Orca resolves even an empty legacy `worktree=` from its durable worktree id, applies the normal or pathless recovery proof above, writes the resolved path into the migrated record, and disables terminal cleanup.
 After provenance succeeds, teardown atomically adds the binding, revalidates the current schema, and rechecks any authorized live endpoint at removal.
 By default, Herdr workspaces are derived from `FM_HOME`: the primary home uses `firstmate`, and a secondmate home marked by `.fm-secondmate-home` uses `2ndmate-<secondmate-id>`.
 The default-container spawn, list-live, and recovery paths read that label from the active home, so a secondmate's own crewmates stay inside that secondmate home's herdr space.

@@ -901,6 +901,16 @@ test_task_binding_status_requires_scoped_home_or_absence() {
   fi
   [ "$status" = 1 ] || fail "live foreign cmux workspace should return unsafe status 1, got $status"
 
+  dir="$TMP_ROOT/task-binding-stale-surface"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-task1)
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  cmux_panes_response "$dir" 3 "cccccccc-2222-2222-2222-222222222222"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_task_binding_status "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-task1' "$ROOT" \
+    || fail "own-home scoped cmux workspace with one replacement surface was not cleanup-authoritative"
+
   dir="$TMP_ROOT/task-binding-scoped"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-task1)
   cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 1
@@ -910,7 +920,7 @@ test_task_binding_status_requires_scoped_home_or_absence() {
   PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_task_binding_status "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-task1' "$ROOT" \
     || fail "own-home scoped cmux workspace was not cleanup-authoritative"
-  pass "fm_backend_cmux_task_binding_status: scoped ownership, foreign refusal, and authoritative absence are distinct"
+  pass "fm_backend_cmux_task_binding_status: owning workspace survives stale surfaces while true absence remains distinct"
 }
 
 # --- kill: close the task workspace, adding a sibling when it is the last one -

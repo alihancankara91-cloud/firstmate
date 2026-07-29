@@ -136,6 +136,12 @@ META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
 validate_task_endpoint_for_teardown() {  # <meta> <id> <owning-home> <owning-root>
   local meta=$1 id=$2 owning_home=$3 owning_root=$4 backend lock rc=0
+  fm_backend_task_endpoint_ownership "$meta" "$id" "$owning_home" "$owning_root" || {
+    echo "REFUSED: task $id has no exact endpoint-owning home; preserving task state." >&2
+    return 1
+  }
+  owning_home=$FM_BACKEND_ENDPOINT_OWNING_HOME
+  owning_root=$FM_BACKEND_ENDPOINT_OWNING_ROOT
   backend=$(fm_backend_of_meta "$meta")
   if [ "$backend" != tmux ] && ! grep -q '^endpoint_task_id=' "$meta" 2>/dev/null; then
     lock="$(dirname "$meta")/.spawn-$id.lock"
@@ -151,6 +157,8 @@ validate_task_endpoint_for_teardown() {  # <meta> <id> <owning-home> <owning-roo
 }
 
 validate_task_endpoint_for_teardown "$META" "$ID" "$FM_HOME" "$FM_ROOT" || exit 1
+ENDPOINT_HOME=$FM_BACKEND_ENDPOINT_OWNING_HOME
+ENDPOINT_ROOT=$FM_BACKEND_ENDPOINT_OWNING_ROOT
 BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
@@ -220,6 +228,17 @@ if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   [ -z "$T_ORCA" ] || T=$T_ORCA
 fi
 
+verified_endpoint_exists() {  # <backend> <target> <tab-id> <label>
+  local backend=$1 target=$2 tab=$3 label=$4
+  if [ "$backend" = zellij ] && [ -n "$tab" ]; then
+    fm_backend_zellij_parse_target "$target" || return 1
+    fm_backend_zellij_session_exists "$FM_BACKEND_ZELLIJ_SESSION" || return 1
+    fm_backend_zellij_tab_matches_label "$FM_BACKEND_ZELLIJ_SESSION" "$tab" "$label"
+    return
+  fi
+  fm_backend_target_exists "$backend" "$target" "$label"
+}
+
 # Kill a recorded endpoint and VERIFY it is actually gone. fm_backend_kill is
 # best-effort by contract, so a failed kill used to be invisible - which is
 # exactly how finished agents accumulated as dead panes (2026-07-23 hygiene
@@ -234,12 +253,12 @@ kill_endpoint_verified() {  # <backend> <target> <tab-id> <label> [herdr-workspa
   FM_HOME=$owning_home FM_ROOT=$owning_root \
     fm_backend_kill "$backend" "$target" "$tab" "$label" "$workspace" 2>/dev/null || true
   FM_HOME=$owning_home FM_ROOT=$owning_root \
-    fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null || return 0
+    verified_endpoint_exists "$backend" "$target" "$tab" "$label" 2>/dev/null || return 0
   sleep 1
   FM_HOME=$owning_home FM_ROOT=$owning_root \
     fm_backend_kill "$backend" "$target" "$tab" "$label" "$workspace" 2>/dev/null || true
   if FM_HOME=$owning_home FM_ROOT=$owning_root \
-    fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null; then
+    verified_endpoint_exists "$backend" "$target" "$tab" "$label" 2>/dev/null; then
     echo "warning: endpoint $target for $label survived teardown removal; close it manually so dead panes do not accumulate" >&2
   fi
   return 0
@@ -1028,6 +1047,7 @@ validate_firstmate_home_children_removal() {
 
 cleanup_firstmate_home_children() {
   local home=$1 sub_state child_meta child_id child_t child_tab child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc
+  local child_endpoint_home child_endpoint_root
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -1053,13 +1073,16 @@ cleanup_firstmate_home_children() {
       fi
     fi
     if [ -n "$child_t" ]; then
+      fm_backend_task_endpoint_ownership "$child_meta" "$child_id" "$home" "$home" || return 1
+      child_endpoint_home=$FM_BACKEND_ENDPOINT_OWNING_HOME
+      child_endpoint_root=$FM_BACKEND_ENDPOINT_OWNING_ROOT
       if [ "$child_backend" = zellij ]; then
-        ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" "$(meta_value "$child_meta" herdr_workspace_id)" ) 2>/dev/null || true
+        ( unset FM_ROOT_OVERRIDE; FM_HOME=$child_endpoint_home FM_ROOT=$child_endpoint_root fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" "$(meta_value "$child_meta" herdr_workspace_id)" ) 2>/dev/null || true
       else
         child_tab=$(meta_value "$child_meta" zellij_tab_id)
         [ "$child_backend" != herdr ] || child_tab=$(meta_value "$child_meta" herdr_tab_id)
         kill_endpoint_verified "$child_backend" "$child_t" "$child_tab" "fm-$child_id" \
-          "$(meta_value "$child_meta" herdr_workspace_id)" "$home" "$home"
+          "$(meta_value "$child_meta" herdr_workspace_id)" "$child_endpoint_home" "$child_endpoint_root"
       fi
     fi
     if [ "$child_kind" = secondmate ]; then
@@ -1309,7 +1332,8 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
 elif [ "$BACKEND" != orca ]; then
   endpoint_tab=$(meta_value "$META" zellij_tab_id)
   [ "$BACKEND" != herdr ] || endpoint_tab=$(meta_value "$META" herdr_tab_id)
-  kill_endpoint_verified "$BACKEND" "$T" "$endpoint_tab" "fm-$ID" "$(meta_value "$META" herdr_workspace_id)"
+  kill_endpoint_verified "$BACKEND" "$T" "$endpoint_tab" "fm-$ID" \
+    "$(meta_value "$META" herdr_workspace_id)" "$ENDPOINT_HOME" "$ENDPOINT_ROOT"
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then

@@ -23,3 +23,12 @@
 - [x] Fix bound Herdr agent-exit cleanup arguments.
 - [x] Update focused regression coverage and operator contract.
 - [x] Run one focused verification.
+
+# Legacy endpoint leak completion
+
+- [x] Reproduce and validate the five remaining ownership findings.
+- [x] Derive the validated secondmate endpoint home for top-level teardown.
+- [x] Authenticate pathless pre-launch Orca recovery without an `fm/<id>` branch.
+- [x] Tighten Herdr, Zellij, and cmux authoritative-absence classification.
+- [x] Add focused regression coverage and update the runtime contract.
+- [x] Run one focused verification.

@@ -1711,6 +1711,18 @@ test_task_binding_status_distinguishes_absence_from_unsafe() {
   local dir log resp fb status
   dir="$TMP_ROOT/binding-status-absent"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n' > "$resp/1.out"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_task_binding_status default w1 w1:t2 w1:p2 firstmate fm-task-a' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 2 ] || fail "authoritative missing Herdr task tab should return absent status 2, got $status"
+
+  dir="$TMP_ROOT/binding-status-stale-pane"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n' > "$resp/1.out"
   printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-task-a"}]}}\n' > "$resp/2.out"
   printf '{"result":{"panes":[]}}\n' > "$resp/3.out"
   fb=$(make_herdr_fakebin "$dir")
@@ -1720,7 +1732,7 @@ test_task_binding_status_distinguishes_absence_from_unsafe() {
   else
     status=$?
   fi
-  [ "$status" = 2 ] || fail "authoritative missing Herdr pane should return absent status 2, got $status"
+  [ "$status" = 1 ] || fail "live Herdr task tab with a stale pane should return unsafe status 1, got $status"
 
   dir="$TMP_ROOT/binding-status-cross-home"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"other-home"}]}}\n' > "$resp/1.out"
@@ -1732,7 +1744,7 @@ test_task_binding_status_distinguishes_absence_from_unsafe() {
     status=$?
   fi
   [ "$status" = 1 ] || fail "cross-home Herdr workspace should return unsafe status 1, got $status"
-  pass "fm_backend_herdr_task_binding_status: authoritative absence differs from cross-home ownership failure"
+  pass "fm_backend_herdr_task_binding_status: task-container absence differs from stale leaves and crossed homes"
 }
 
 test_agent_exit_passes_bound_herdr_identity() {

@@ -458,9 +458,12 @@ fm_backend_validate_task_endpoint_impl() {  # <meta-file> <task-id> <current|leg
       return 1
       ;;
   esac
-  if [ -n "$recovery" ] && { [ "$backend" != orca ] || [ "$recovery" != worktree-only ] || [ "$binding" != "$id" ]; }; then
-    echo "REFUSED: task $id has invalid Orca recovery metadata; preserving task state." >&2
-    return 1
+  if [ -n "$recovery" ]; then
+    if [ "$backend" != orca ] || [ "$recovery" != worktree-only ] \
+      || { [ "$binding" != "$id" ] && { [ "$validation_mode" != legacy-structure ] || [ -n "$binding" ]; }; }; then
+      echo "REFUSED: task $id has invalid Orca recovery metadata; preserving task state." >&2
+      return 1
+    fi
   fi
   legacy_cleanup_count=$(grep -c '^legacy_endpoint_cleanup=' "$meta" 2>/dev/null || true)
   case "$legacy_cleanup_count" in
@@ -604,12 +607,10 @@ fm_backend_existing_dir_equal() {  # <left> <right>
   [ "$left_real" = "$right_real" ]
 }
 
-fm_backend_registered_task_worktree_matches() {  # <worktree> <project> <task-id>
-  local worktree=$1 project=$2 id=$3 top branch listed registered=0
+fm_backend_registered_worktree_matches() {  # <worktree> <project>
+  local worktree=$1 project=$2 top listed registered=0
   top=$(git -C "$worktree" rev-parse --show-toplevel 2>/dev/null) || return 1
   fm_backend_existing_dir_equal "$worktree" "$top" || return 1
-  branch=$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 1
-  [ "$branch" = "fm/$id" ] || return 1
   while IFS= read -r listed; do
     [ -n "$listed" ] || continue
     if fm_backend_existing_dir_equal "$worktree" "$listed"; then
@@ -622,8 +623,22 @@ EOF
   [ "$registered" = 1 ]
 }
 
+fm_backend_registered_task_worktree_matches() {  # <worktree> <project> <task-id>
+  local worktree=$1 project=$2 id=$3 branch
+  fm_backend_registered_worktree_matches "$worktree" "$project" || return 1
+  branch=$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 1
+  [ "$branch" = "fm/$id" ]
+}
+
+fm_backend_registered_orca_recovery_worktree_matches() {  # <worktree> <project> <task-id>
+  local worktree=$1 project=$2 id=$3 branch
+  fm_backend_registered_worktree_matches "$worktree" "$project" || return 1
+  branch=$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 1
+  [ "$branch" = "fm-$id" ]
+}
+
 fm_backend_legacy_worktree_matches() {  # <meta-file> <task-id> <backend>
-  local meta=$1 id=$2 backend=$3 worktree project kind home marker resolved worktree_count
+  local meta=$1 id=$2 backend=$3 worktree project kind home marker resolved worktree_count kind_count pathless=0 recovery
   FM_BACKEND_LEGACY_RESOLVED_WORKTREE=
   project=$(fm_backend_meta_exact_value "$meta" project) || return 1
   worktree_count=$(grep -c '^worktree=' "$meta" 2>/dev/null || true)
@@ -634,8 +649,14 @@ fm_backend_legacy_worktree_matches() {  # <meta-file> <task-id> <backend>
     resolved=$(fm_backend_worktree_path orca "$(fm_backend_meta_exact_value "$meta" orca_worktree_id)") || return 1
     worktree=$resolved
     FM_BACKEND_LEGACY_RESOLVED_WORKTREE=$resolved
+    pathless=1
   fi
-  kind=$(fm_meta_get "$meta" kind)
+  kind_count=$(grep -c '^kind=' "$meta" 2>/dev/null || true)
+  case "$kind_count" in
+    0) kind= ;;
+    1) kind=$(fm_backend_meta_exact_value "$meta" kind) || return 1 ;;
+    *) return 1 ;;
+  esac
   if [ "$kind" = secondmate ]; then
     home=$(fm_backend_meta_exact_value "$meta" home) || return 1
     fm_backend_existing_dir_equal "$worktree" "$home" || return 1
@@ -644,11 +665,37 @@ fm_backend_legacy_worktree_matches() {  # <meta-file> <task-id> <backend>
     [ "$(sed -n '1p' "$marker" 2>/dev/null)" = "$id" ] || return 1
     return 0
   fi
-  fm_backend_registered_task_worktree_matches "$worktree" "$project" "$id" || return 1
+  if [ "$pathless" = 1 ]; then
+    recovery=$(fm_backend_meta_exact_value "$meta" orca_recovery) || return 1
+    [ "$recovery" = worktree-only ] || return 1
+    fm_backend_registered_orca_recovery_worktree_matches "$worktree" "$project" "$id" || return 1
+  else
+    fm_backend_registered_task_worktree_matches "$worktree" "$project" "$id" || return 1
+  fi
   if [ "$backend" = orca ]; then
     [ -n "$resolved" ] || resolved=$(fm_backend_worktree_path orca "$(fm_backend_meta_exact_value "$meta" orca_worktree_id)") || return 1
     fm_backend_existing_dir_equal "$worktree" "$resolved" || return 1
   fi
+}
+
+fm_backend_task_endpoint_ownership() {  # <meta-file> <task-id> <default-home> <default-root>
+  local meta=$1 id=$2 default_home=$3 default_root=$4 kind_count kind backend home
+  FM_BACKEND_ENDPOINT_OWNING_HOME=$(cd "$default_home" 2>/dev/null && pwd -P) || return 1
+  FM_BACKEND_ENDPOINT_OWNING_ROOT=$(cd "$default_root" 2>/dev/null && pwd -P) || return 1
+  kind_count=$(grep -c '^kind=' "$meta" 2>/dev/null || true)
+  case "$kind_count" in
+    0) return 0 ;;
+    1) kind=$(fm_backend_meta_exact_value "$meta" kind) || return 1 ;;
+    *) return 1 ;;
+  esac
+  [ "$kind" = secondmate ] || return 0
+  backend=$(fm_backend_of_meta "$meta")
+  fm_backend_legacy_worktree_matches "$meta" "$id" "$backend" || return 1
+  home=$(fm_backend_meta_exact_value "$meta" home) || return 1
+  home=$(cd "$home" 2>/dev/null && pwd -P) || return 1
+  FM_BACKEND_ENDPOINT_OWNING_HOME=$home
+  FM_BACKEND_ENDPOINT_OWNING_ROOT=$home
+  : "$FM_BACKEND_ENDPOINT_OWNING_HOME" "$FM_BACKEND_ENDPOINT_OWNING_ROOT"
 }
 
 fm_backend_legacy_herdr_journal_status() {  # <meta-file> <task-id> <home>

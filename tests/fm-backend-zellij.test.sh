@@ -308,6 +308,7 @@ test_task_binding_status_requires_scoped_home_or_absence() {
   local dir fb status scoped
   dir="$TMP_ROOT/task-binding-absent"; mkdir -p "$dir/responses"
   printf '[]\n' > "$dir/responses/1.out"
+  printf '[]\n' > "$dir/responses/2.out"
   fb=$(make_zellij_fakebin "$dir")
   if PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT"; then
@@ -316,6 +317,15 @@ test_task_binding_status_requires_scoped_home_or_absence() {
     status=$?
   fi
   [ "$status" = 2 ] || fail "authoritative missing Zellij pane should return absent status 2, got $status"
+
+  dir="$TMP_ROOT/task-binding-stale-pane"; mkdir -p "$dir/responses"
+  scoped=$(zellij_expected_scoped_title fm-task1)
+  printf '[]\n' > "$dir/responses/1.out"
+  zellij_tab_response "$dir" 2 3 "$scoped"
+  fb=$(make_zellij_fakebin "$dir")
+  PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT" \
+    || fail "own-home scoped Zellij tab with a stale pane was not cleanup-authoritative"
 
   dir="$TMP_ROOT/task-binding-bare"; mkdir -p "$dir/responses"
   zellij_pane_response "$dir" 1 7 3
@@ -337,7 +347,7 @@ test_task_binding_status_requires_scoped_home_or_absence() {
   PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT" \
     || fail "own-home scoped Zellij title was not cleanup-authoritative"
-  pass "fm_backend_zellij_task_binding_status: scoped ownership, bare refusal, and authoritative absence are distinct"
+  pass "fm_backend_zellij_task_binding_status: owning tab survives stale leaves while true absence remains distinct"
 }
 
 test_list_live_scopes_to_own_home_tag() {
