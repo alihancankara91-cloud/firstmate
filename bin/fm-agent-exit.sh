@@ -257,10 +257,16 @@ if [ -n "$T" ] && fm_backend_target_exists "$BACKEND" "$T" "$LABEL" 2>/dev/null;
       exit 1
     fi
   else
-    fm_backend_kill "$BACKEND" "$T" "$(fm_meta_get "$META" zellij_tab_id)" "$LABEL" 2>/dev/null || true
+    ENDPOINT_TAB=$(fm_meta_get "$META" zellij_tab_id)
+    ENDPOINT_WORKSPACE=
+    if [ "$BACKEND" = herdr ]; then
+      ENDPOINT_TAB=$(fm_meta_get "$META" herdr_tab_id)
+      ENDPOINT_WORKSPACE=$(fm_meta_get "$META" herdr_workspace_id)
+    fi
+    fm_backend_kill "$BACKEND" "$T" "$ENDPOINT_TAB" "$LABEL" "$ENDPOINT_WORKSPACE" 2>/dev/null || true
     if fm_backend_target_exists "$BACKEND" "$T" "$LABEL" 2>/dev/null; then
       sleep 1
-      fm_backend_kill "$BACKEND" "$T" "$(fm_meta_get "$META" zellij_tab_id)" "$LABEL" 2>/dev/null || true
+      fm_backend_kill "$BACKEND" "$T" "$ENDPOINT_TAB" "$LABEL" "$ENDPOINT_WORKSPACE" 2>/dev/null || true
       if fm_backend_target_exists "$BACKEND" "$T" "$LABEL" 2>/dev/null; then
         echo "error: endpoint $T for $ID survived removal; a successor launched now could still receive input queued at it. Do not relaunch until the endpoint is confirmed gone." >&2
         exit 1

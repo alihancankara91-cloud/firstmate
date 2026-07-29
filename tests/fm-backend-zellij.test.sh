@@ -304,6 +304,42 @@ test_expected_label_refuses_ambiguous_untagged_tab() {
   pass "fm_backend_zellij_tab_matches_label: refuses an untagged legacy label match when 2+ live tabs share it (migration ambiguity guard)"
 }
 
+test_task_binding_status_requires_scoped_home_or_absence() {
+  local dir fb status scoped
+  dir="$TMP_ROOT/task-binding-absent"; mkdir -p "$dir/responses"
+  printf '[]\n' > "$dir/responses/1.out"
+  fb=$(make_zellij_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 2 ] || fail "authoritative missing Zellij pane should return absent status 2, got $status"
+
+  dir="$TMP_ROOT/task-binding-bare"; mkdir -p "$dir/responses"
+  zellij_pane_response "$dir" 1 7 3
+  zellij_tab_response "$dir" 2 3 fm-task1
+  fb=$(make_zellij_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 1 ] || fail "live bare Zellij title should return unsafe status 1, got $status"
+
+  dir="$TMP_ROOT/task-binding-scoped"; mkdir -p "$dir/responses"
+  scoped=$(zellij_expected_scoped_title fm-task1)
+  zellij_pane_response "$dir" 1 7 3
+  zellij_tab_response "$dir" 2 3 "$scoped"
+  fb=$(make_zellij_fakebin "$dir")
+  PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT" \
+    || fail "own-home scoped Zellij title was not cleanup-authoritative"
+  pass "fm_backend_zellij_task_binding_status: scoped ownership, bare refusal, and authoritative absence are distinct"
+}
+
 test_list_live_scopes_to_own_home_tag() {
   local dir fb out own_title foreign_title other_root
   dir="$TMP_ROOT/list-live-scope"; mkdir -p "$dir/responses"
@@ -1036,6 +1072,7 @@ test_scoped_title_uses_secondmate_home_label
 test_scoped_title_changes_with_root_path
 test_expected_label_accepts_unambiguous_untagged_legacy_tab
 test_expected_label_refuses_ambiguous_untagged_tab
+test_task_binding_status_requires_scoped_home_or_absence
 test_list_live_scopes_to_own_home_tag
 test_resolve_bare_selector_prefers_scoped_title
 test_resolve_bare_selector_refuses_ambiguous_untagged

@@ -1688,8 +1688,9 @@ test_kill_is_best_effort() {
 test_kill_rechecks_exact_task_binding() {
   local dir log resp fb
   dir="$TMP_ROOT/kill-bound"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-task-a"}]}}\n' > "$resp/1.out"
-  printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}\n' > "$resp/2.out"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n' > "$resp/1.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-task-a"}]}}\n' > "$resp/2.out"
+  printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}\n' > "$resp/3.out"
   fb=$(make_herdr_fakebin "$dir")
   PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_kill default:w1:p2 w1:t2 fm-task-a w1' "$ROOT"
@@ -1697,13 +1698,51 @@ test_kill_rechecks_exact_task_binding() {
     "bound kill did not close the exactly labeled pane"
 
   dir="$TMP_ROOT/kill-label-swap"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-task-b"}]}}\n' > "$resp/1.out"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"other-home"}]}}\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
   PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_kill default:w1:p2 w1:t2 fm-task-a w1' "$ROOT"
   assert_not_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close' \
     "label-swapped Herdr endpoint reached pane close"
-  pass "fm_backend_herdr_kill: rechecks exact tab label and pane binding at mutation time"
+  pass "fm_backend_herdr_kill: rechecks owning workspace, tab label, and pane binding at mutation time"
+}
+
+test_task_binding_status_distinguishes_absence_from_unsafe() {
+  local dir log resp fb status
+  dir="$TMP_ROOT/binding-status-absent"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n' > "$resp/1.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-task-a"}]}}\n' > "$resp/2.out"
+  printf '{"result":{"panes":[]}}\n' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_task_binding_status default w1 w1:t2 w1:p2 firstmate fm-task-a' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 2 ] || fail "authoritative missing Herdr pane should return absent status 2, got $status"
+
+  dir="$TMP_ROOT/binding-status-cross-home"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"other-home"}]}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_task_binding_status default w1 w1:t2 w1:p2 firstmate fm-task-a' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 1 ] || fail "cross-home Herdr workspace should return unsafe status 1, got $status"
+  pass "fm_backend_herdr_task_binding_status: authoritative absence differs from cross-home ownership failure"
+}
+
+test_agent_exit_passes_bound_herdr_identity() {
+  local source
+  source=$(<"$ROOT/bin/fm-agent-exit.sh")
+  assert_contains "$source" "fm_meta_get \"\$META\" herdr_tab_id" "agent exit does not select the recorded Herdr tab"
+  assert_contains "$source" "fm_meta_get \"\$META\" herdr_workspace_id" "agent exit does not select the owning Herdr workspace"
+  assert_contains "$source" "fm_backend_kill \"\$BACKEND\" \"\$T\" \"\$ENDPOINT_TAB\" \"\$LABEL\" \"\$ENDPOINT_WORKSPACE\"" \
+    "agent exit does not pass the full bound Herdr identity to endpoint removal"
+  pass "fm-agent-exit: ordinary Herdr removal passes tab and owning workspace identity"
 }
 
 test_current_path_reads_cwd() {
@@ -3065,6 +3104,8 @@ test_capture_preserves_pane_read_failure
 test_send_key_normalizes_and_targets_pane
 test_kill_is_best_effort
 test_kill_rechecks_exact_task_binding
+test_task_binding_status_distinguishes_absence_from_unsafe
+test_agent_exit_passes_bound_herdr_identity
 test_current_path_reads_cwd
 test_busy_state_working_maps_to_busy
 test_busy_state_done_and_blocked_map_to_idle

@@ -1672,6 +1672,46 @@ fm_backend_herdr_task_binding_matches() {  # <session> <workspace> <tab> <pane> 
   ' >/dev/null 2>&1
 }
 
+fm_backend_herdr_workspace_binding_matches() {  # <session> <workspace> <expected-label>
+  local session=$1 workspace=$2 expected_label=$3 list
+  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
+  printf '%s' "$list" | jq -e --arg workspace "$workspace" --arg expected_name "$expected_label" '
+    (.result.workspaces | type) == "array"
+    and ([.result.workspaces[]? | select(.workspace_id == $workspace and .label == $expected_name)] | length) == 1
+    and ([.result.workspaces[]? | select(.label == $expected_name)] | length) == 1
+  ' >/dev/null 2>&1
+}
+
+fm_backend_herdr_task_binding_status() {  # <session> <workspace> <tab> <pane> <workspace-label> <task-label>
+  local session=$1 workspace=$2 tab=$3 pane=$4 workspace_label=$5 task_label=$6
+  local list tabs panes workspace_count pane_count tuple_count
+  list=$(fm_backend_herdr_cli "$session" workspace list 2>/dev/null) || return 1
+  printf '%s' "$list" | jq -e '(.result.workspaces | type) == "array"' >/dev/null 2>&1 || return 1
+  workspace_count=$(printf '%s' "$list" | jq -r --arg workspace "$workspace" \
+    '[.result.workspaces[]? | select(.workspace_id == $workspace)] | length' 2>/dev/null) || return 1
+  [ "$workspace_count" != 0 ] || return 2
+  [ "$workspace_count" = 1 ] || return 1
+  printf '%s' "$list" | jq -e --arg workspace "$workspace" --arg expected_name "$workspace_label" '
+    ([.result.workspaces[]? | select(.workspace_id == $workspace and .label == $expected_name)] | length) == 1
+    and ([.result.workspaces[]? | select(.label == $expected_name)] | length) == 1
+  ' >/dev/null 2>&1 || return 1
+  tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$workspace" 2>/dev/null) || return 1
+  printf '%s' "$tabs" | jq -e '(.result.tabs | type) == "array"' >/dev/null 2>&1 || return 1
+  panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$workspace" 2>/dev/null) || return 1
+  printf '%s' "$panes" | jq -e '(.result.panes | type) == "array"' >/dev/null 2>&1 || return 1
+  pane_count=$(printf '%s' "$panes" | jq -r --arg pane "$pane" \
+    '[.result.panes[]? | select(.pane_id == $pane)] | length' 2>/dev/null) || return 1
+  [ "$pane_count" != 0 ] || return 2
+  [ "$pane_count" = 1 ] || return 1
+  tuple_count=$(printf '%s' "$panes" | jq -r --arg pane "$pane" --arg tab "$tab" \
+    '[.result.panes[]? | select(.pane_id == $pane and .tab_id == $tab)] | length' 2>/dev/null) || return 1
+  [ "$tuple_count" = 1 ] || return 1
+  printf '%s' "$tabs" | jq -e --arg tab_ref "$tab" --arg expected_name "$task_label" '
+    ([.result.tabs[]? | select(.tab_id == $tab_ref and .label == $expected_name)] | length) == 1
+    and ([.result.tabs[]? | select(.label == $expected_name)] | length) == 1
+  ' >/dev/null 2>&1
+}
+
 # fm_backend_herdr_current_path: the live FOREGROUND process's cwd, or empty on
 # any error. Mirrors tmux's pane_current_path poll used for worktree-path
 # discovery after `treehouse get`.
@@ -2115,10 +2155,13 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 # tmux-kill-window's `|| true` contract). Verified: closing a tab's only pane
 # closes the tab too, so a separate tab close is unnecessary.
 fm_backend_herdr_kill() {  # <target> [tab-id] [expected-label] [workspace-id]
-  local target=$1 tab=${2:-} expected_label=${3:-} workspace=${4:-}
+  local target=$1 tab=${2:-} expected_label=${3:-} workspace=${4:-} workspace_label
   fm_backend_herdr_parse_target "$target" || return 0
   if [ -n "$expected_label" ]; then
     [ -n "$tab" ] && [ -n "$workspace" ] || return 0
+    workspace_label=$(fm_backend_herdr_workspace_label)
+    fm_backend_herdr_workspace_binding_matches \
+      "$FM_BACKEND_HERDR_SESSION" "$workspace" "$workspace_label" || return 0
     fm_backend_herdr_task_binding_matches \
       "$FM_BACKEND_HERDR_SESSION" "$workspace" "$tab" "$FM_BACKEND_HERDR_PANE" "$expected_label" || return 0
   else

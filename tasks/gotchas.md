@@ -9,3 +9,9 @@
 - The docs audience checker classifies every changed Markdown file, including workflow task ledgers, so focused source verification must account for those separately.
 - Locate the audience inventory from the checker defaults before assuming its path.
 - ShellCheck treats a later test-local function override as the definition for earlier calls, so real-helper coverage and stubbed orchestration coverage belong in separate test functions.
+- Patch workflow ledgers separately when their prior-round content is not part of the source context just inspected.
+- Split cross-file patches when one helper signature has evolved, or one stale context rejects otherwise valid changes.
+- Home-scope regression stubs must preserve the function return-code contract while inspecting temporary environment assignments.
+- New multi-branch shell helpers must end successful paths explicitly with zero so `set -e` test runners do not inherit a predicate's incidental status.
+- Preserve backend-specific child cleanup call sequences when home scoping is already correct; extend only the backend missing the ownership context.
+- Focused lint includes informational ShellCheck findings, so test assertions containing literal shell expansions must escape them and dynamic test overrides need local lint annotations.

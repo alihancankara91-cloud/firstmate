@@ -134,8 +134,8 @@ FM_LOCK_LOG_PREFIX=teardown
 
 META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
-validate_task_endpoint_for_teardown() {  # <meta> <id>
-  local meta=$1 id=$2 backend lock rc=0
+validate_task_endpoint_for_teardown() {  # <meta> <id> <owning-home> <owning-root>
+  local meta=$1 id=$2 owning_home=$3 owning_root=$4 backend lock rc=0
   backend=$(fm_backend_of_meta "$meta")
   if [ "$backend" != tmux ] && ! grep -q '^endpoint_task_id=' "$meta" 2>/dev/null; then
     lock="$(dirname "$meta")/.spawn-$id.lock"
@@ -143,14 +143,14 @@ validate_task_endpoint_for_teardown() {  # <meta> <id>
       echo "REFUSED: task $id endpoint migration lock is busy; preserving task state." >&2
       return 1
     }
-    fm_backend_migrate_legacy_task_endpoint "$meta" "$id" || rc=$?
+    fm_backend_migrate_legacy_task_endpoint "$meta" "$id" "$owning_home" "$owning_root" || rc=$?
     fm_lock_release "$lock" || true
     [ "$rc" -eq 0 ] || return "$rc"
   fi
   fm_backend_validate_task_endpoint "$meta" "$id"
 }
 
-validate_task_endpoint_for_teardown "$META" "$ID" || exit 1
+validate_task_endpoint_for_teardown "$META" "$ID" "$FM_HOME" "$FM_ROOT" || exit 1
 BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
@@ -227,14 +227,19 @@ fi
 # still completes, because the safety checks have already passed by the time
 # this runs and stranding task state over a display-surface failure would be
 # worse than one visible leftover pane.
-kill_endpoint_verified() {  # <backend> <target> <tab-id> <label> [herdr-workspace-id]
+kill_endpoint_verified() {  # <backend> <target> <tab-id> <label> [herdr-workspace-id] [owning-home] [owning-root]
   local backend=$1 target=$2 tab=$3 label=$4 workspace=${5:-}
+  local owning_home=${6:-$FM_HOME} owning_root=${7:-$FM_ROOT}
   [ -n "$target" ] || return 0
-  fm_backend_kill "$backend" "$target" "$tab" "$label" "$workspace" 2>/dev/null || true
-  fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null || return 0
+  FM_HOME=$owning_home FM_ROOT=$owning_root \
+    fm_backend_kill "$backend" "$target" "$tab" "$label" "$workspace" 2>/dev/null || true
+  FM_HOME=$owning_home FM_ROOT=$owning_root \
+    fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null || return 0
   sleep 1
-  fm_backend_kill "$backend" "$target" "$tab" "$label" "$workspace" 2>/dev/null || true
-  if fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null; then
+  FM_HOME=$owning_home FM_ROOT=$owning_root \
+    fm_backend_kill "$backend" "$target" "$tab" "$label" "$workspace" 2>/dev/null || true
+  if FM_HOME=$owning_home FM_ROOT=$owning_root \
+    fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null; then
     echo "warning: endpoint $target for $label survived teardown removal; close it manually so dead panes do not accumulate" >&2
   fi
   return 0
@@ -996,7 +1001,7 @@ validate_firstmate_home_children_removal() {
   for child_meta in "$sub_state"/*.meta; do
     [ -e "$child_meta" ] || continue
     child_id=$(basename "$child_meta" .meta)
-    validate_task_endpoint_for_teardown "$child_meta" "$child_id" || return 1
+    validate_task_endpoint_for_teardown "$child_meta" "$child_id" "$home" "$home" || return 1
     validate_pr_poll_cleanup "$sub_state" "$child_id" || return 1
     child_wt=$(meta_value "$child_meta" worktree)
     child_kind=$(meta_value "$child_meta" kind)
@@ -1049,13 +1054,12 @@ cleanup_firstmate_home_children() {
     fi
     if [ -n "$child_t" ]; then
       if [ "$child_backend" = zellij ]; then
-        # Zellij titles are scoped by the owning home tag, so forced secondmate
-        # cleanup must verify child tabs as that child home, not the parent.
         ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" "$(meta_value "$child_meta" herdr_workspace_id)" ) 2>/dev/null || true
       else
         child_tab=$(meta_value "$child_meta" zellij_tab_id)
         [ "$child_backend" != herdr ] || child_tab=$(meta_value "$child_meta" herdr_tab_id)
-        kill_endpoint_verified "$child_backend" "$child_t" "$child_tab" "fm-$child_id" "$(meta_value "$child_meta" herdr_workspace_id)"
+        kill_endpoint_verified "$child_backend" "$child_t" "$child_tab" "fm-$child_id" \
+          "$(meta_value "$child_meta" herdr_workspace_id)" "$home" "$home"
       fi
     fi
     if [ "$child_kind" = secondmate ]; then

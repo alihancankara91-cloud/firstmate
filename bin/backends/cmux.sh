@@ -431,6 +431,44 @@ fm_backend_cmux_target_ready() {  # <target> [expected-label]
   fm_backend_cmux_surface_exists "$FM_BACKEND_CMUX_WORKSPACE" "$FM_BACKEND_CMUX_SURFACE"
 }
 
+fm_backend_cmux_task_binding_status() {  # <target> <expected-label>
+  local target=$1 expected_label=$2 state expected_title windows window_id workspaces
+  local recorded_count=0 scoped_count=0 recorded_scoped_count=0 surface_count panes
+  state=$(fm_backend_cmux_ping_state)
+  [ "$state" = ok ] || return 1
+  fm_backend_cmux_parse_target "$target" || return 1
+  expected_title=$(fm_backend_cmux_scoped_title "$expected_label")
+  windows=$(fm_backend_cmux_cli list-windows --json --id-format uuids 2>/dev/null) || return 1
+  printf '%s' "$windows" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  while IFS= read -r window_id; do
+    [ -n "$window_id" ] || continue
+    workspaces=$(fm_backend_cmux_cli workspace list --json --id-format uuids --window "$window_id" 2>/dev/null) || return 1
+    printf '%s' "$workspaces" | jq -e '(.workspaces | type) == "array"' >/dev/null 2>&1 || return 1
+    recorded_count=$((recorded_count + $(printf '%s' "$workspaces" | jq -r --arg id "$FM_BACKEND_CMUX_WORKSPACE" \
+      '[.workspaces[]? | select(.id == $id)] | length' 2>/dev/null)))
+    scoped_count=$((scoped_count + $(printf '%s' "$workspaces" | jq -r --arg expected_name "$expected_title" \
+      '[.workspaces[]? | select(.title == $expected_name)] | length' 2>/dev/null)))
+    recorded_scoped_count=$((recorded_scoped_count + $(printf '%s' "$workspaces" | jq -r \
+      --arg id "$FM_BACKEND_CMUX_WORKSPACE" --arg expected_name "$expected_title" \
+      '[.workspaces[]? | select(.id == $id and .title == $expected_name)] | length' 2>/dev/null)))
+  done <<EOF
+$(printf '%s' "$windows" | jq -r '.[]? | .id' 2>/dev/null)
+EOF
+  [ "$recorded_count" != 0 ] || {
+    [ "$scoped_count" = 0 ] && return 2
+    return 1
+  }
+  [ "$recorded_count" = 1 ] && [ "$scoped_count" = 1 ] && [ "$recorded_scoped_count" = 1 ] || return 1
+  panes=$(fm_backend_cmux_cli list-panes --workspace "$FM_BACKEND_CMUX_WORKSPACE" --json --id-format uuids 2>/dev/null) || return 1
+  printf '%s' "$panes" | jq -e '(.panes | type) == "array"' >/dev/null 2>&1 || return 1
+  surface_count=$(printf '%s' "$panes" | jq -r --arg surface "$FM_BACKEND_CMUX_SURFACE" \
+    '[.panes[]? | select(.surface_ids // [] | index($surface))] | length' 2>/dev/null) || return 1
+  [ "$surface_count" = 1 ] || {
+    [ "$surface_count" = 0 ] && return 2
+    return 1
+  }
+}
+
 # fm_backend_cmux_current_path: the live foreground process's cwd, or empty on
 # any error. Mirrors fm_backend_zellij_current_path's active pwd-marker-probe
 # workaround (bin/backends/zellij.sh:306-347) verbatim in spirit.

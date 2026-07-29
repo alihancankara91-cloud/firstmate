@@ -875,6 +875,44 @@ test_window_of_workspace_empty_when_not_found() {
   pass "fm_backend_cmux_window_of_workspace: echoes nothing when no window holds the workspace"
 }
 
+test_task_binding_status_requires_scoped_home_or_absence() {
+  local dir fb status title
+  dir="$TMP_ROOT/task-binding-absent"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other"
+  fb=$(make_cmux_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_task_binding_status "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-task1' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 2 ] || fail "authoritative missing cmux workspace should return absent status 2, got $status"
+
+  dir="$TMP_ROOT/task-binding-foreign"; mkdir -p "$dir/responses"
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "foreign-home-task"
+  fb=$(make_cmux_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_task_binding_status "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-task1' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 1 ] || fail "live foreign cmux workspace should return unsafe status 1, got $status"
+
+  dir="$TMP_ROOT/task-binding-scoped"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-task1)
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "aaaaaaaa-0000-0000-0000-000000000000" "$title"
+  cmux_panes_response "$dir" 3 "bbbbbbbb-1111-1111-1111-111111111111"
+  fb=$(make_cmux_fakebin "$dir")
+  PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_task_binding_status "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-task1' "$ROOT" \
+    || fail "own-home scoped cmux workspace was not cleanup-authoritative"
+  pass "fm_backend_cmux_task_binding_status: scoped ownership, foreign refusal, and authoritative absence are distinct"
+}
+
 # --- kill: close the task workspace, adding a sibling when it is the last one -
 
 # The common case: the task workspace shares its window with at least one other
@@ -1055,6 +1093,7 @@ test_send_text_submit_popup_autocomplete_requires_second_enter
 test_send_text_submit_send_failed_when_target_absent
 test_window_of_workspace_finds_window_and_count
 test_window_of_workspace_empty_when_not_found
+test_task_binding_status_requires_scoped_home_or_absence
 test_kill_closes_workspace_directly_when_not_last
 test_kill_adds_sibling_when_last_in_window
 test_kill_is_best_effort_when_close_workspace_fails

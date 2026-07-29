@@ -81,9 +81,12 @@ These five sentences are the single owner of the task-selector vocabulary; backe
 `fm-teardown.sh <id>` takes a task id directly and validates the complete current endpoint identity before any runtime dispatch or cleanup mutation.
 Missing, empty, duplicate, malformed, backend-inconsistent, or task-mismatched endpoint records are preserved and refused.
 Legacy tmux metadata remains cleanup-compatible when its exact window name is `fm-<id>`.
-For a legacy opaque record without `endpoint_task_id=`, teardown takes the task's spawn lock, requires the recorded worktree to be a project-registered worktree on exact branch `fm/<id>` or an exact marked secondmate home, and requires Herdr, Zellij, or cmux to corroborate the recorded endpoint against its unique live `fm-<id>` label.
-Orca additionally requires its recorded worktree id to resolve to that exact worktree path and migrates with terminal cleanup disabled because the verified Orca response does not bind a terminal handle to the worktree.
-After corroboration, teardown atomically adds the binding, revalidates the current schema, and rechecks the Herdr, Zellij, or cmux label at endpoint removal; missing, ambiguous, renamed-branch, crossed, pathless unbound Orca, or unavailable provenance fails closed without cleanup.
+For a legacy opaque record without `endpoint_task_id=`, teardown takes the task's spawn lock and requires its recorded worktree to be a project-registered worktree on exact branch `fm/<id>` or an exact marked secondmate home.
+A live Herdr endpoint is cleanup-authoritative only inside the owning home's workspace or through an exact version-2 presentation journal, while Zellij and cmux require the owning home's scoped title.
+If an authoritative backend inventory proves the recorded Herdr, Zellij, or cmux endpoint is absent, migration records `skip-endpoint` and preserves endpoint state while keeping the proven worktree cleanup usable.
+An unreadable inventory, a live bare Zellij title, or a live crossed or foreign endpoint fails closed without cleanup.
+Orca resolves even an empty legacy `worktree=` from its durable worktree id, requires that resolved path to be the exact project-registered `fm/<id>` worktree, writes the resolved path into the migrated record, and disables terminal cleanup.
+After provenance succeeds, teardown atomically adds the binding, revalidates the current schema, and rechecks any authorized live endpoint at removal.
 By default, Herdr workspaces are derived from `FM_HOME`: the primary home uses `firstmate`, and a secondmate home marked by `.fm-secondmate-home` uses `2ndmate-<secondmate-id>`.
 The default-container spawn, list-live, and recovery paths read that label from the active home, so a secondmate's own crewmates stay inside that secondmate home's herdr space.
 The optional local `config/herdr-presentation-spaces` presence flag instead enables Herdr's default-off disposable single-task visual projection; [Optional presentation spaces](herdr-backend.md#optional-presentation-spaces) owns its behavior, safety limits, recovery contract, and narrow locked session-start cleanup of exact restored idle-shell children.

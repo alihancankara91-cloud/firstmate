@@ -14,3 +14,12 @@
 - [x] Document the compatibility and migration contract in `docs/configuration.md`.
 - [x] Add downgrade and authenticated-legacy regression coverage.
 - [x] Run one focused verification.
+
+# Legacy ownership completion
+
+- [x] Reproduce and validate the five remaining cleanup findings.
+- [x] Unify durable task and home provenance for legacy endpoint migration.
+- [x] Preserve worktree cleanup when legacy endpoints are absent or unauthoritative.
+- [x] Fix bound Herdr agent-exit cleanup arguments.
+- [x] Update focused regression coverage and operator contract.
+- [x] Run one focused verification.

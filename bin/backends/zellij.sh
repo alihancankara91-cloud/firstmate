@@ -308,6 +308,29 @@ fm_backend_zellij_tab_matches_label() {  # <session> <tab_id> <label>
   [ "$count" = "1" ]
 }
 
+fm_backend_zellij_task_binding_status() {  # <session> <tab-id> <pane-id> <label>
+  local session=$1 tab_id=$2 pane_id=$3 label=$4 panes tabs pane_count tuple_count
+  panes=$(fm_backend_zellij_cli "$session" action list-panes --json 2>/dev/null) || return 1
+  printf '%s' "$panes" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  pane_count=$(printf '%s' "$panes" | jq -r --argjson pane_ref "$pane_id" \
+    '[.[]? | select(.id == $pane_ref and .is_plugin == false)] | length' 2>/dev/null) || return 1
+  [ "$pane_count" != 0 ] || return 2
+  [ "$pane_count" = 1 ] || return 1
+  tuple_count=$(printf '%s' "$panes" | jq -r --argjson pane_ref "$pane_id" --argjson tab_ref "$tab_id" \
+    '[.[]? | select(.id == $pane_ref and .tab_id == $tab_ref and .is_plugin == false)] | length' 2>/dev/null) || return 1
+  [ "$tuple_count" = 1 ] || return 1
+  tabs=$(fm_backend_zellij_cli "$session" action list-tabs --json 2>/dev/null) || return 1
+  printf '%s' "$tabs" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  fm_backend_zellij_tab_matches_scoped_label_from_json "$tabs" "$tab_id" "$label"
+}
+
+fm_backend_zellij_tab_matches_scoped_label_from_json() {  # <tabs-json> <tab-id> <label>
+  local tabs=$1 tab_id=$2 label=$3 scoped
+  scoped=$(fm_backend_zellij_scoped_title "$label")
+  printf '%s' "$tabs" | jq -e --argjson tab_ref "$tab_id" --arg expected_name "$scoped" \
+    '[.[]? | select(.tab_id == $tab_ref and .name == $expected_name)] | length == 1' >/dev/null 2>&1
+}
+
 # fm_backend_zellij_create_task: create the task's tab (one terminal pane) in
 # <session>, refusing an existing <label>. Zellij does NOT enforce tab-name
 # uniqueness itself (verified: two tabs can share a name), so the duplicate

@@ -350,8 +350,14 @@ fm_backend_of_meta() {  # <meta-file>
 }
 
 fm_backend_target_of_meta() {  # <meta-file>
-  local meta=$1 backend terminal window
+  local meta=$1 backend terminal window legacy_cleanup binding id
   backend=$(fm_backend_of_meta "$meta")
+  legacy_cleanup=$(fm_meta_get "$meta" legacy_endpoint_cleanup)
+  binding=$(fm_meta_get "$meta" endpoint_task_id)
+  id=$(basename "$meta" .meta)
+  case "$backend:$legacy_cleanup:$binding" in
+    orca:skip-terminal:"$id"|herdr:skip-endpoint:"$id"|zellij:skip-endpoint:"$id"|cmux:skip-endpoint:"$id") return 0 ;;
+  esac
   if [ "$backend" = orca ]; then
     terminal=$(fm_meta_get "$meta" terminal)
     [ -n "$terminal" ] && { printf '%s' "$terminal"; return 0; }
@@ -470,10 +476,14 @@ fm_backend_validate_task_endpoint_impl() {  # <meta-file> <task-id> <current|leg
       return 1
       ;;
   esac
-  if [ -n "$legacy_cleanup" ] \
-    && { [ "$backend" != orca ] || [ "$legacy_cleanup" != skip-terminal ] || [ "$binding" != "$id" ]; }; then
-    echo "REFUSED: task $id has invalid legacy cleanup metadata; preserving task state." >&2
-    return 1
+  if [ -n "$legacy_cleanup" ]; then
+    case "$backend:$legacy_cleanup:$binding" in
+      orca:skip-terminal:"$id"|herdr:skip-endpoint:"$id"|zellij:skip-endpoint:"$id"|cmux:skip-endpoint:"$id") ;;
+      *)
+        echo "REFUSED: task $id has invalid legacy cleanup metadata; preserving task state." >&2
+        return 1
+        ;;
+    esac
   fi
   worktree_count=$(grep -c '^worktree=' "$meta" 2>/dev/null || true)
   if [ "$worktree_count" -ne 1 ]; then
@@ -482,8 +492,7 @@ fm_backend_validate_task_endpoint_impl() {  # <meta-file> <task-id> <current|leg
   fi
   worktree=$(grep '^worktree=' "$meta" | cut -d= -f2-)
   if [ -z "$worktree" ] && [ "$recovery" != worktree-only ]; then
-    if [ "$backend" != orca ] || [ -n "$binding" ] \
-      || [ "$(grep -c '^terminal=' "$meta" 2>/dev/null || true)" -ne 0 ]; then
+    if [ "$backend" != orca ] || [ -n "$binding" ]; then
       echo "REFUSED: task $id has an empty worktree identity; preserving task state." >&2
       return 1
     fi
@@ -517,6 +526,7 @@ fm_backend_validate_task_endpoint_impl() {  # <meta-file> <task-id> <current|leg
         echo "REFUSED: Herdr endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
         return 1
       fi
+      [ "$legacy_cleanup" != skip-endpoint ] || window=
       ;;
     zellij)
       recorded_session=$(fm_backend_meta_exact_value "$meta" zellij_session) || recorded_session=
@@ -529,6 +539,7 @@ fm_backend_validate_task_endpoint_impl() {  # <meta-file> <task-id> <current|leg
         echo "REFUSED: Zellij endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
         return 1
       fi
+      [ "$legacy_cleanup" != skip-endpoint ] || window=
       ;;
     orca)
       terminal_count=$(grep -c '^terminal=' "$meta" 2>/dev/null || true)
@@ -568,6 +579,7 @@ fm_backend_validate_task_endpoint_impl() {  # <meta-file> <task-id> <current|leg
         echo "REFUSED: cmux endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
         return 1
       fi
+      [ "$legacy_cleanup" != skip-endpoint ] || window=
       ;;
   esac
   # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
@@ -592,19 +604,8 @@ fm_backend_existing_dir_equal() {  # <left> <right>
   [ "$left_real" = "$right_real" ]
 }
 
-fm_backend_legacy_worktree_matches() {  # <meta-file> <task-id> <backend>
-  local meta=$1 id=$2 backend=$3 worktree project kind home marker top branch listed registered=0 resolved
-  worktree=$(fm_backend_meta_exact_value "$meta" worktree) || return 1
-  project=$(fm_backend_meta_exact_value "$meta" project) || return 1
-  kind=$(fm_meta_get "$meta" kind)
-  if [ "$kind" = secondmate ]; then
-    home=$(fm_backend_meta_exact_value "$meta" home) || return 1
-    fm_backend_existing_dir_equal "$worktree" "$home" || return 1
-    marker="$home/.fm-secondmate-home"
-    [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
-    [ "$(sed -n '1p' "$marker" 2>/dev/null)" = "$id" ] || return 1
-    return 0
-  fi
+fm_backend_registered_task_worktree_matches() {  # <worktree> <project> <task-id>
+  local worktree=$1 project=$2 id=$3 top branch listed registered=0
   top=$(git -C "$worktree" rev-parse --show-toplevel 2>/dev/null) || return 1
   fm_backend_existing_dir_equal "$worktree" "$top" || return 1
   branch=$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 1
@@ -618,15 +619,74 @@ fm_backend_legacy_worktree_matches() {  # <meta-file> <task-id> <backend>
   done <<EOF
 $(git -C "$project" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
 EOF
-  [ "$registered" = 1 ] || return 1
-  if [ "$backend" = orca ]; then
+  [ "$registered" = 1 ]
+}
+
+fm_backend_legacy_worktree_matches() {  # <meta-file> <task-id> <backend>
+  local meta=$1 id=$2 backend=$3 worktree project kind home marker resolved worktree_count
+  FM_BACKEND_LEGACY_RESOLVED_WORKTREE=
+  project=$(fm_backend_meta_exact_value "$meta" project) || return 1
+  worktree_count=$(grep -c '^worktree=' "$meta" 2>/dev/null || true)
+  [ "$worktree_count" -eq 1 ] || return 1
+  worktree=$(grep '^worktree=' "$meta" | cut -d= -f2-)
+  if [ -z "$worktree" ]; then
+    [ "$backend" = orca ] || return 1
     resolved=$(fm_backend_worktree_path orca "$(fm_backend_meta_exact_value "$meta" orca_worktree_id)") || return 1
+    worktree=$resolved
+    FM_BACKEND_LEGACY_RESOLVED_WORKTREE=$resolved
+  fi
+  kind=$(fm_meta_get "$meta" kind)
+  if [ "$kind" = secondmate ]; then
+    home=$(fm_backend_meta_exact_value "$meta" home) || return 1
+    fm_backend_existing_dir_equal "$worktree" "$home" || return 1
+    marker="$home/.fm-secondmate-home"
+    [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
+    [ "$(sed -n '1p' "$marker" 2>/dev/null)" = "$id" ] || return 1
+    return 0
+  fi
+  fm_backend_registered_task_worktree_matches "$worktree" "$project" "$id" || return 1
+  if [ "$backend" = orca ]; then
+    [ -n "$resolved" ] || resolved=$(fm_backend_worktree_path orca "$(fm_backend_meta_exact_value "$meta" orca_worktree_id)") || return 1
     fm_backend_existing_dir_equal "$worktree" "$resolved" || return 1
   fi
 }
 
-fm_backend_legacy_live_binding_matches() {  # <meta-file> <task-id> <backend> <target>
-  local meta=$1 id=$2 backend=$3 target=$4 session workspace tab pane
+fm_backend_legacy_herdr_journal_status() {  # <meta-file> <task-id> <home>
+  local meta=$1 id=$2 home=$3 journal session workspace tab pane status
+  journal="$(dirname "$meta")/$id.herdr-presentation"
+  [ -f "$journal" ] && [ ! -L "$journal" ] || return 3
+  fm_backend_herdr_projection_journal_snapshot "$journal" "$id" || return 3
+  [ "$FM_BACKEND_HERDR_JOURNAL_VERSION" = 2 ] || return 3
+  fm_backend_existing_dir_equal "$home" "$FM_BACKEND_HERDR_JOURNAL_HOME" || return 3
+  session=$(fm_backend_meta_exact_value "$meta" herdr_session) || return 3
+  workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || return 3
+  tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || return 3
+  pane=$(fm_backend_meta_exact_value "$meta" herdr_pane_id) || return 3
+  [ "$session:$workspace:$tab:$pane" = \
+    "$FM_BACKEND_HERDR_JOURNAL_SESSION:$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_ID:$FM_BACKEND_HERDR_JOURNAL_TAB_ID:$FM_BACKEND_HERDR_JOURNAL_PANE_ID" ] || return 3
+  fm_backend_herdr_projection_live_binding_matches \
+    "$session" \
+    "$FM_BACKEND_HERDR_JOURNAL_PROJECTION_ID" \
+    "$workspace" \
+    "$tab" \
+    "$pane" \
+    "$FM_BACKEND_HERDR_JOURNAL_PARENT_WORKSPACE_ID" \
+    "$FM_BACKEND_HERDR_JOURNAL_PARENT_LABEL" \
+    "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" \
+    "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" && return 0
+  status=0
+  fm_backend_herdr_task_binding_status \
+    "$session" "$workspace" "$tab" "$pane" \
+    "$FM_BACKEND_HERDR_JOURNAL_WORKSPACE_LABEL" \
+    "$FM_BACKEND_HERDR_JOURNAL_TASK_LABEL" || status=$?
+  [ "$status" = 2 ] && return 2
+  return 1
+}
+
+fm_backend_legacy_endpoint_status() {  # <meta-file> <task-id> <backend> <target> <home> <root>
+  local meta=$1 id=$2 backend=$3 target=$4 home=$5 root=$6 session workspace tab pane workspace_label status
+  home=$(cd "$home" 2>/dev/null && pwd -P) || return 1
+  root=$(cd "$root" 2>/dev/null && pwd -P) || return 1
   case "$backend" in
     herdr)
       fm_backend_source herdr || return 1
@@ -634,18 +694,23 @@ fm_backend_legacy_live_binding_matches() {  # <meta-file> <task-id> <backend> <t
       workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || return 1
       tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || return 1
       pane=$(fm_backend_meta_exact_value "$meta" herdr_pane_id) || return 1
-      fm_backend_herdr_task_binding_matches "$session" "$workspace" "$tab" "$pane" "fm-$id" || return 1
+      status=0
+      FM_HOME=$home fm_backend_legacy_herdr_journal_status "$meta" "$id" "$home" || status=$?
+      case "$status" in 0|1|2) return "$status" ;; esac
+      workspace_label=$(FM_HOME=$home fm_backend_herdr_workspace_label) || return 1
+      FM_HOME=$home fm_backend_herdr_task_binding_status \
+        "$session" "$workspace" "$tab" "$pane" "$workspace_label" "fm-$id"
       ;;
     zellij)
       fm_backend_source zellij || return 1
       fm_backend_zellij_parse_target "$target" || return 1
-      tab=$(fm_backend_zellij_tab_for_pane "$FM_BACKEND_ZELLIJ_SESSION" "$FM_BACKEND_ZELLIJ_PANE" 2>/dev/null)
-      [ "$tab" = "$(fm_backend_meta_exact_value "$meta" zellij_tab_id)" ] || return 1
-      fm_backend_zellij_tab_matches_label "$FM_BACKEND_ZELLIJ_SESSION" "$tab" "fm-$id" || return 1
+      tab=$(fm_backend_meta_exact_value "$meta" zellij_tab_id) || return 1
+      FM_HOME=$home FM_ROOT=$root fm_backend_zellij_task_binding_status \
+        "$FM_BACKEND_ZELLIJ_SESSION" "$tab" "$FM_BACKEND_ZELLIJ_PANE" "fm-$id"
       ;;
     cmux)
       fm_backend_source cmux || return 1
-      fm_backend_cmux_target_ready "$target" "fm-$id" || return 1
+      FM_HOME=$home FM_ROOT=$root fm_backend_cmux_task_binding_status "$target" "fm-$id"
       ;;
     orca)
       return 1
@@ -656,8 +721,10 @@ fm_backend_legacy_live_binding_matches() {  # <meta-file> <task-id> <backend> <t
   esac
 }
 
-fm_backend_migrate_legacy_task_endpoint() {  # <meta-file> <task-id>
-  local meta=$1 id=$2 backend target before after stage tmp legacy_cleanup=
+fm_backend_migrate_legacy_task_endpoint() {  # <meta-file> <task-id> [owning-home] [owning-root]
+  local meta=$1 id=$2 owning_home=${3:-$FM_HOME} owning_root=${4:-$FM_ROOT}
+  local backend target before after stage tmp endpoint_status
+  local legacy_cleanup='' resolved_worktree=''
   fm_backend_validate_legacy_task_endpoint_structure "$meta" "$id" || return 1
   before=$(cksum "$meta" 2>/dev/null) || return 1
   backend=$FM_BACKEND_VALIDATED_BACKEND
@@ -667,13 +734,20 @@ fm_backend_migrate_legacy_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: legacy $backend metadata for task $id lacks exact worktree provenance; preserving task state." >&2
     return 1
   }
+  resolved_worktree=$FM_BACKEND_LEGACY_RESOLVED_WORKTREE
   if [ "$backend" = orca ]; then
     legacy_cleanup=skip-terminal
   else
-    fm_backend_legacy_live_binding_matches "$meta" "$id" "$backend" "$target" || {
-      echo "REFUSED: legacy $backend metadata for task $id lacks a live task-bound endpoint; preserving task state." >&2
-      return 1
-    }
+    endpoint_status=0
+    fm_backend_legacy_endpoint_status "$meta" "$id" "$backend" "$target" "$owning_home" "$owning_root" || endpoint_status=$?
+    case "$endpoint_status" in
+      0) ;;
+      2) legacy_cleanup=skip-endpoint ;;
+      *)
+        echo "REFUSED: legacy $backend metadata for task $id lacks exact endpoint ownership or authoritative absence; preserving task state." >&2
+        return 1
+        ;;
+    esac
   fi
   after=$(cksum "$meta" 2>/dev/null) || {
     return 1
@@ -684,7 +758,9 @@ fm_backend_migrate_legacy_task_endpoint() {  # <meta-file> <task-id>
   fi
   stage=$(mktemp -d "${meta}.migrate.XXXXXX") || return 1
   tmp="$stage/$id.meta"
-  if ! cp -p "$meta" "$tmp" \
+  if { [ -z "$resolved_worktree" ] && ! cp -p "$meta" "$tmp"; } \
+    || { [ -n "$resolved_worktree" ] \
+      && ! awk -v path="$resolved_worktree" '$0 == "worktree=" { print "worktree=" path; next } { print }' "$meta" > "$tmp"; } \
     || [ "$(cksum "$meta" 2>/dev/null)" != "$before" ] \
     || ! printf 'endpoint_task_id=%s\n' "$id" >> "$tmp" \
     || { [ -n "$legacy_cleanup" ] && ! printf 'legacy_endpoint_cleanup=%s\n' "$legacy_cleanup" >> "$tmp"; } \

@@ -112,7 +112,7 @@ test_invalid_endpoint_records_refuse_before_mutation() {
 }
 
 test_legacy_worktree_provenance() {
-  local dir id=legacy-proven proven_project proven_worktree
+  local dir id=legacy-proven proven_project proven_worktree orca_project orca_worktree
   dir=$(make_case legacy-provenance)
   # shellcheck source=/dev/null
   . "$ROOT/bin/fm-backend.sh"
@@ -126,7 +126,58 @@ test_legacy_worktree_provenance() {
     || fail "exact project-registered fm/<id> worktree provenance was rejected"
   ! fm_backend_legacy_worktree_matches "$dir/home/state/$id.meta" other-task zellij \
     || fail "another task id accepted the recorded legacy worktree branch"
-  pass "legacy cleanup identity: exact project-registered fm/<id> worktree provenance is required"
+
+  id=legacy-pathless-orca
+  orca_project="$dir/orca-project"
+  orca_worktree="$dir/orca-worktree"
+  fm_git_worktree "$orca_project" "$orca_worktree" "fm/$id"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "terminal=legacy-terminal" "worktree=" "project=$orca_project" \
+    "backend=orca" "orca_worktree_id=orca-worktree-id"
+  fm_backend_worktree_path() {
+    [ "$1:$2" = orca:orca-worktree-id ] || return 1
+    printf '%s' "$orca_worktree"
+  }
+  fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" "$dir/home" "$ROOT" \
+    || fail "pathless legacy Orca record did not resolve and migrate"
+  assert_grep "worktree=$orca_worktree" "$dir/home/state/$id.meta" "pathless Orca migration did not persist its resolved worktree"
+  assert_grep "endpoint_task_id=$id" "$dir/home/state/$id.meta" "pathless Orca migration omitted task binding"
+  assert_grep "legacy_endpoint_cleanup=skip-terminal" "$dir/home/state/$id.meta" "pathless Orca migration did not suppress terminal cleanup"
+  [ -z "$FM_BACKEND_VALIDATED_TARGET" ] || fail "pathless Orca migration retained a terminal cleanup target"
+  pass "legacy cleanup identity: exact registered worktrees authenticate recorded and pathless Orca cleanup"
+}
+
+test_legacy_endpoint_status_uses_owning_home() {
+  local dir id=home-bound
+  dir=$(make_case owning-home)
+  printf 'owner\n' > "$dir/home/.fm-secondmate-home"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:w1:p2" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t2" "herdr_pane_id=w1:p2"
+  (
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-backend.sh"
+    # shellcheck disable=SC2329
+    fm_backend_source() { return 0; }
+    # shellcheck disable=SC2329
+    fm_backend_legacy_herdr_journal_status() { return 3; }
+    # shellcheck disable=SC2329
+    fm_backend_herdr_workspace_label() {
+      [ "$(cd "$FM_HOME" && pwd -P)" = "$(cd "$dir/home" && pwd -P)" ] || return 1
+      printf '2ndmate-owner'
+    }
+    # shellcheck disable=SC2329
+    fm_backend_herdr_task_binding_status() {
+      [ "$5" = 2ndmate-owner ] || return 1
+      return 0
+    }
+    fm_backend_legacy_endpoint_status \
+      "$dir/home/state/$id.meta" "$id" herdr lab:w1:p2 "$dir/home" "$dir/home"
+  ) || fail "legacy Herdr endpoint proof did not use its explicit owning home"
+
+  assert_grep "validate_task_endpoint_for_teardown \"\$child_meta\" \"\$child_id\" \"\$home\" \"\$home\"" \
+    "$ROOT/bin/fm-teardown.sh" "recursive child validation does not thread the child home and root"
+  pass "legacy endpoint identity: owning home is explicit for top-level and recursive cleanup"
 }
 
 test_supported_backend_endpoint_records_validate() {
@@ -174,14 +225,25 @@ test_supported_backend_endpoint_records_validate() {
 
   fm_backend_legacy_worktree_matches() {
     case "$2" in
-      legacy-herdr|legacy-zellij|legacy-orca|legacy-cmux|legacy-crossed) return 0 ;;
+      legacy-herdr|legacy-zellij|legacy-orca|legacy-orca-recovery|legacy-cmux|legacy-crossed|legacy-dead-*) 
+        if [ "$2" = legacy-orca-recovery ]; then
+          FM_BACKEND_LEGACY_RESOLVED_WORKTREE=$dir/worktree
+        else
+          FM_BACKEND_LEGACY_RESOLVED_WORKTREE=
+        fi
+        : "$FM_BACKEND_LEGACY_RESOLVED_WORKTREE"
+        return 0
+        ;;
       *) return 1 ;;
     esac
   }
-  fm_backend_legacy_live_binding_matches() {
+  fm_backend_legacy_endpoint_status() {
     case "$2:$3" in
       legacy-herdr:herdr|legacy-zellij:zellij|legacy-cmux:cmux)
         return 0
+        ;;
+      legacy-dead-herdr:herdr|legacy-dead-zellij:zellij|legacy-dead-cmux:cmux)
+        return 2
         ;;
       *) return 1 ;;
     esac
@@ -217,9 +279,11 @@ test_supported_backend_endpoint_records_validate() {
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=fm-$id" "worktree=" "project=$dir/project" \
     "backend=orca" "orca_worktree_id=worktree-legacy-recovery"
-  ! fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null \
-    || fail "pathless unbound legacy Orca recovery migrated without task-bound provenance"
-  assert_no_grep 'endpoint_task_id=' "$dir/home/state/$id.meta" "refused pathless legacy Orca recovery gained a binding"
+  fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" \
+    || fail "proven pathless legacy Orca recovery did not migrate"
+  assert_grep "worktree=$dir/worktree" "$dir/home/state/$id.meta" "pathless legacy Orca recovery did not persist its resolved worktree"
+  assert_grep "endpoint_task_id=$id" "$dir/home/state/$id.meta" "pathless legacy Orca recovery omitted task binding"
+  assert_grep "legacy_endpoint_cleanup=skip-terminal" "$dir/home/state/$id.meta" "pathless legacy Orca recovery retained terminal cleanup"
 
   id=legacy-cmux
   fm_write_meta "$dir/home/state/$id.meta" \
@@ -228,6 +292,32 @@ test_supported_backend_endpoint_records_validate() {
   ! fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null || fail "unmigrated legacy cmux endpoint passed current validation"
   fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "proven legacy cmux endpoint did not migrate"
   assert_grep "endpoint_task_id=$id" "$dir/home/state/$id.meta" "legacy cmux migration omitted task binding"
+
+  for backend in herdr zellij cmux; do
+    id=legacy-dead-$backend
+    case "$backend" in
+      herdr)
+        fm_write_meta "$dir/home/state/$id.meta" \
+          "window=lab:w1:p92" "worktree=$dir/worktree" "project=$dir/project" \
+          "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t92" "herdr_pane_id=w1:p92"
+        ;;
+      zellij)
+        fm_write_meta "$dir/home/state/$id.meta" \
+          "window=lab:92" "worktree=$dir/worktree" "project=$dir/project" \
+          "backend=zellij" "zellij_session=lab" "zellij_tab_id=91" "zellij_pane_id=92"
+        ;;
+      cmux)
+        fm_write_meta "$dir/home/state/$id.meta" \
+          "window=workspace-91:surface-92" "worktree=$dir/worktree" "project=$dir/project" \
+          "backend=cmux" "cmux_workspace_id=workspace-91" "cmux_surface_id=surface-92"
+        ;;
+    esac
+    fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" \
+      || fail "authoritatively absent legacy $backend endpoint did not migrate"
+    assert_grep "legacy_endpoint_cleanup=skip-endpoint" "$dir/home/state/$id.meta" "dead legacy $backend migration did not suppress endpoint cleanup"
+    [ -z "$FM_BACKEND_VALIDATED_TARGET" ] || fail "dead legacy $backend migration retained a cleanup target"
+    [ -z "$(fm_backend_target_of_meta "$dir/home/state/$id.meta")" ] || fail "dead legacy $backend metadata still resolved an endpoint target"
+  done
 
   id=legacy-crossed
   fm_write_meta "$dir/home/state/$id.meta" \
@@ -251,7 +341,7 @@ test_supported_backend_endpoint_records_validate() {
     set -e
     [ "$target" -ne 0 ] || fail "$backend generic kill accepted an empty target"
   done
-  pass "cleanup identity: current records validate, proven legacy records migrate, and crossed or pathless legacy records refuse"
+  pass "cleanup identity: live task-bound and authoritatively absent legacy endpoints migrate while crossed records refuse"
 }
 
 test_tmux_empty_target_refuses_without_invocation() {
@@ -378,6 +468,7 @@ SH
 
 test_invalid_endpoint_records_refuse_before_mutation
 test_legacy_worktree_provenance
+test_legacy_endpoint_status_uses_owning_home
 test_supported_backend_endpoint_records_validate
 test_tmux_empty_target_refuses_without_invocation
 test_recorded_process_identity_cleanup_is_exact

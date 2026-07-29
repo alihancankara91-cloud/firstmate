@@ -42,7 +42,7 @@ Zellij does not enforce tab-name uniqueness, so the adapter performs its own dup
 Create, recover, list, and cleanup paths all use the same scoped title owner in `bin/fm-backend-hometag-lib.sh`.
 Moving a Firstmate installation changes its path hash and leaves old titles unmatched, consistent with worktree paths also becoming stale after a move.
 
-A pre-home-tag task remains reachable through its recorded metadata only when exactly one live tab has the old unscoped title.
+A pre-home-tag task remains reachable for compatible non-destructive operations through its recorded metadata only when exactly one live tab has the old unscoped title.
 Multiple old tabs with the same title cause a refusal rather than a guess.
 Bulk recovery never adopts unscoped legacy tabs because it has no safe home identity for them.
 
@@ -55,7 +55,7 @@ zellij_pane_id=<pane-id>
 ```
 
 Recorded pane ids are numeric and are never trusted alone after a session recreation.
-Metadata-routed operations also verify the owning tab's expected scoped or unambiguous legacy title.
+Destructive legacy migration requires the owning home's scoped title or authoritative endpoint absence under the contract in [`configuration.md`](configuration.md), while other metadata-routed operations retain the unambiguous legacy-title compatibility path.
 An explicit raw `session:pane` target remains a pane-existence-only operator escape hatch.
 
 ## Current operation and safety
