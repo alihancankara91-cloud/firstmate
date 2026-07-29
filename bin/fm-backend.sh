@@ -638,7 +638,7 @@ fm_backend_registered_orca_recovery_worktree_matches() {  # <worktree> <project>
 }
 
 fm_backend_legacy_worktree_matches() {  # <meta-file> <task-id> <backend>
-  local meta=$1 id=$2 backend=$3 worktree project kind home marker resolved worktree_count kind_count pathless=0 recovery
+  local meta=$1 id=$2 backend=$3 worktree project kind home marker resolved worktree_count kind_count pathless=0
   FM_BACKEND_LEGACY_RESOLVED_WORKTREE=
   project=$(fm_backend_meta_exact_value "$meta" project) || return 1
   worktree_count=$(grep -c '^worktree=' "$meta" 2>/dev/null || true)
@@ -666,8 +666,6 @@ fm_backend_legacy_worktree_matches() {  # <meta-file> <task-id> <backend>
     return 0
   fi
   if [ "$pathless" = 1 ]; then
-    recovery=$(fm_backend_meta_exact_value "$meta" orca_recovery) || return 1
-    [ "$recovery" = worktree-only ] || return 1
     fm_backend_registered_orca_recovery_worktree_matches "$worktree" "$project" "$id" || return 1
   else
     fm_backend_registered_task_worktree_matches "$worktree" "$project" "$id" || return 1
@@ -691,6 +689,7 @@ fm_backend_task_endpoint_ownership() {  # <meta-file> <task-id> <default-home> <
   [ "$kind" = secondmate ] || return 0
   backend=$(fm_backend_of_meta "$meta")
   fm_backend_legacy_worktree_matches "$meta" "$id" "$backend" || return 1
+  [ "$backend" = herdr ] || return 0
   home=$(fm_backend_meta_exact_value "$meta" home) || return 1
   home=$(cd "$home" 2>/dev/null && pwd -P) || return 1
   FM_BACKEND_ENDPOINT_OWNING_HOME=$home
@@ -757,7 +756,11 @@ fm_backend_legacy_endpoint_status() {  # <meta-file> <task-id> <backend> <target
       ;;
     cmux)
       fm_backend_source cmux || return 1
-      FM_HOME=$home FM_ROOT=$root fm_backend_cmux_task_binding_status "$target" "fm-$id"
+      status=0
+      FM_HOME=$home FM_ROOT=$root fm_backend_cmux_task_binding_status "$target" "fm-$id" || status=$?
+      [ "$status" = 0 ] || return "$status"
+      FM_BACKEND_LEGACY_RESOLVED_TARGET=$FM_BACKEND_CMUX_RESOLVED_TARGET
+      : "$FM_BACKEND_LEGACY_RESOLVED_TARGET"
       ;;
     orca)
       return 1
@@ -771,7 +774,7 @@ fm_backend_legacy_endpoint_status() {  # <meta-file> <task-id> <backend> <target
 fm_backend_migrate_legacy_task_endpoint() {  # <meta-file> <task-id> [owning-home] [owning-root]
   local meta=$1 id=$2 owning_home=${3:-$FM_HOME} owning_root=${4:-$FM_ROOT}
   local backend target before after stage tmp endpoint_status
-  local legacy_cleanup='' resolved_worktree=''
+  local legacy_cleanup='' resolved_worktree='' resolved_endpoint=''
   fm_backend_validate_legacy_task_endpoint_structure "$meta" "$id" || return 1
   before=$(cksum "$meta" 2>/dev/null) || return 1
   backend=$FM_BACKEND_VALIDATED_BACKEND
@@ -785,6 +788,7 @@ fm_backend_migrate_legacy_task_endpoint() {  # <meta-file> <task-id> [owning-hom
   if [ "$backend" = orca ]; then
     legacy_cleanup=skip-terminal
   else
+    FM_BACKEND_LEGACY_RESOLVED_TARGET=
     endpoint_status=0
     fm_backend_legacy_endpoint_status "$meta" "$id" "$backend" "$target" "$owning_home" "$owning_root" || endpoint_status=$?
     case "$endpoint_status" in
@@ -795,6 +799,7 @@ fm_backend_migrate_legacy_task_endpoint() {  # <meta-file> <task-id> [owning-hom
         return 1
         ;;
     esac
+    resolved_endpoint=$FM_BACKEND_LEGACY_RESOLVED_TARGET
   fi
   after=$(cksum "$meta" 2>/dev/null) || {
     return 1
@@ -805,9 +810,15 @@ fm_backend_migrate_legacy_task_endpoint() {  # <meta-file> <task-id> [owning-hom
   fi
   stage=$(mktemp -d "${meta}.migrate.XXXXXX") || return 1
   tmp="$stage/$id.meta"
-  if { [ -z "$resolved_worktree" ] && ! cp -p "$meta" "$tmp"; } \
-    || { [ -n "$resolved_worktree" ] \
-      && ! awk -v path="$resolved_worktree" '$0 == "worktree=" { print "worktree=" path; next } { print }' "$meta" > "$tmp"; } \
+  if { [ -z "$resolved_worktree" ] && [ -z "$resolved_endpoint" ] && ! cp -p "$meta" "$tmp"; } \
+    || { { [ -n "$resolved_worktree" ] || [ -n "$resolved_endpoint" ]; } \
+      && ! awk -v path="$resolved_worktree" -v endpoint="$resolved_endpoint" '
+        $0 == "worktree=" && path != "" { print "worktree=" path; next }
+        /^window=/ && endpoint != "" { print "window=" endpoint; next }
+        /^cmux_workspace_id=/ && endpoint != "" { split(endpoint, parts, ":"); print "cmux_workspace_id=" parts[1]; next }
+        /^cmux_surface_id=/ && endpoint != "" { split(endpoint, parts, ":"); print "cmux_surface_id=" parts[2]; next }
+        { print }
+      ' "$meta" > "$tmp"; } \
     || [ "$(cksum "$meta" 2>/dev/null)" != "$before" ] \
     || ! printf 'endpoint_task_id=%s\n' "$id" >> "$tmp" \
     || { [ -n "$legacy_cleanup" ] && ! printf 'legacy_endpoint_cleanup=%s\n' "$legacy_cleanup" >> "$tmp"; } \

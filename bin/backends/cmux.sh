@@ -335,6 +335,15 @@ fm_backend_cmux_workspace_id_for_label() {  # <label>
     | jq -r --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null | head -1
 }
 
+fm_backend_cmux_unique_workspace_id_for_label() {  # <label>
+  local label=$1 out
+  out=$(fm_backend_cmux_cli workspace list --json --id-format uuids 2>/dev/null) || return 1
+  printf '%s' "$out" | jq -e --arg want "$label" \
+    '(.workspaces | type) == "array" and ([.workspaces[]? | select(.title == $want)] | length) == 1' \
+    >/dev/null 2>&1 || return 1
+  printf '%s' "$out" | jq -r --arg want "$label" '.workspaces[]? | select(.title == $want) | .id' 2>/dev/null
+}
+
 fm_backend_cmux_surface_id_for_workspace() {  # <workspace_id>
   local wsid=$1
   fm_backend_cmux_cli list-panes --workspace "$wsid" --json --id-format uuids 2>/dev/null \
@@ -419,7 +428,7 @@ fm_backend_cmux_target_ready() {  # <target> [expected-label]
     elif [ -n "$title" ]; then
       return 1
     else
-      wsid=$(fm_backend_cmux_workspace_id_for_label "$expected_title")
+      wsid=$(fm_backend_cmux_unique_workspace_id_for_label "$expected_title")
       [ -n "$wsid" ] || return 1
     fi
     sfid=$(fm_backend_cmux_surface_id_for_workspace "$wsid")
@@ -432,8 +441,9 @@ fm_backend_cmux_target_ready() {  # <target> [expected-label]
 }
 
 fm_backend_cmux_task_binding_status() {  # <target> <expected-label>
-  local target=$1 expected_label=$2 state expected_title windows window_id workspaces
-  local recorded_count=0 scoped_count=0 recorded_scoped_count=0 surface_count replacement_count panes
+  local target=$1 expected_label=$2 state expected_title windows window_id workspaces scoped_match task_workspace
+  local recorded_count=0 scoped_count=0 recorded_scoped_count=0 surface_count replacement_count replacement_surface panes
+  FM_BACKEND_CMUX_RESOLVED_TARGET=
   state=$(fm_backend_cmux_ping_state)
   [ "$state" = ok ] || return 1
   fm_backend_cmux_parse_target "$target" || return 1
@@ -451,23 +461,37 @@ fm_backend_cmux_task_binding_status() {  # <target> <expected-label>
     recorded_scoped_count=$((recorded_scoped_count + $(printf '%s' "$workspaces" | jq -r \
       --arg id "$FM_BACKEND_CMUX_WORKSPACE" --arg expected_name "$expected_title" \
       '[.workspaces[]? | select(.id == $id and .title == $expected_name)] | length' 2>/dev/null)))
+    scoped_match=$(printf '%s' "$workspaces" | jq -r --arg expected_name "$expected_title" \
+      '.workspaces[]? | select(.title == $expected_name) | .id' 2>/dev/null) || return 1
+    [ -z "$scoped_match" ] || task_workspace=$scoped_match
   done <<EOF
 $(printf '%s' "$windows" | jq -r '.[]? | .id' 2>/dev/null)
 EOF
-  [ "$recorded_count" != 0 ] || {
-    [ "$scoped_count" = 0 ] && return 2
-    return 1
-  }
-  [ "$recorded_count" = 1 ] && [ "$scoped_count" = 1 ] && [ "$recorded_scoped_count" = 1 ] || return 1
-  panes=$(fm_backend_cmux_cli list-panes --workspace "$FM_BACKEND_CMUX_WORKSPACE" --json --id-format uuids 2>/dev/null) || return 1
+  if [ "$recorded_count" = 0 ]; then
+    [ "$scoped_count" != 0 ] || return 2
+    [ "$scoped_count" = 1 ] || return 1
+  else
+    [ "$recorded_count" = 1 ] && [ "$scoped_count" = 1 ] && [ "$recorded_scoped_count" = 1 ] || return 1
+    task_workspace=$FM_BACKEND_CMUX_WORKSPACE
+  fi
+  panes=$(fm_backend_cmux_cli list-panes --workspace "$task_workspace" --json --id-format uuids 2>/dev/null) || return 1
   printf '%s' "$panes" | jq -e '(.panes | type) == "array"' >/dev/null 2>&1 || return 1
   surface_count=$(printf '%s' "$panes" | jq -r --arg surface "$FM_BACKEND_CMUX_SURFACE" \
     '[.panes[]? | select(.surface_ids // [] | index($surface))] | length' 2>/dev/null) || return 1
   [ "$surface_count" -le 1 ] || return 1
-  [ "$surface_count" = 1 ] && return 0
+  if [ "$surface_count" = 1 ]; then
+    FM_BACKEND_CMUX_RESOLVED_TARGET="$task_workspace:$FM_BACKEND_CMUX_SURFACE"
+    : "$FM_BACKEND_CMUX_RESOLVED_TARGET"
+    return 0
+  fi
   replacement_count=$(printf '%s' "$panes" | jq -r \
     '[.panes[]? | (.surface_ids // [])[]?] | unique | length' 2>/dev/null) || return 1
-  [ "$replacement_count" = 1 ]
+  [ "$replacement_count" = 1 ] || return 1
+  replacement_surface=$(printf '%s' "$panes" | jq -r \
+    '[.panes[]? | (.surface_ids // [])[]?] | unique[0]' 2>/dev/null) || return 1
+  [ -n "$replacement_surface" ] && [ "$replacement_surface" != null ] || return 1
+  FM_BACKEND_CMUX_RESOLVED_TARGET="$task_workspace:$replacement_surface"
+  : "$FM_BACKEND_CMUX_RESOLVED_TARGET"
 }
 
 # fm_backend_cmux_current_path: the live foreground process's cwd, or empty on

@@ -32,3 +32,12 @@
 - [x] Tighten Herdr, Zellij, and cmux authoritative-absence classification.
 - [x] Add focused regression coverage and update the runtime contract.
 - [x] Run one focused verification.
+
+# Historical runtime recovery completion
+
+- [x] Reproduce and validate the three remaining compatibility findings.
+- [x] Authenticate markerless pathless Orca records with historical provenance.
+- [x] Keep Zellij secondmates on their state-owning parent home.
+- [x] Reacquire unique cmux replacement workspaces and surfaces.
+- [x] Add focused regressions and update the runtime contract.
+- [x] Run one focused verification.

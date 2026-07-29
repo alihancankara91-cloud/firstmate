@@ -870,7 +870,7 @@ test_teardown_passes_recorded_tab_id_to_zellij_kill() {
 }
 
 test_forced_secondmate_teardown_kills_zellij_children_with_child_home_tag() {
-  local dir state data config home project fb out status child_title
+  local dir state data config home project fb out status child_title parent_title
   dir="$TMP_ROOT/teardown-zellij-secondmate-child"; state="$dir/state"; data="$dir/data"; config="$dir/config"; home="$dir/secondmate-home"; project="$dir/project"
   mkdir -p "$state" "$data" "$config" "$home/state" "$home/data" "$home/config" "$home/projects" "$project" "$dir/responses"
   printf 'smz\n' > "$home/.fm-secondmate-home"
@@ -897,9 +897,14 @@ test_forced_secondmate_teardown_kills_zellij_children_with_child_home_tag() {
     "project=$project" \
     "kind=scout"
   child_title=$(zellij_expected_scoped_title fm-childz "$home" "$home")
+  parent_title=$(zellij_expected_scoped_title fm-smz "$ROOT" "$ROOT")
   zellij_pane_response "$dir" 1 7 4
   zellij_tab_response "$dir" 2 4 "$child_title"
   printf '[]\n' > "$dir/responses/3.out"
+  zellij_pane_response "$dir" 4 99 99
+  zellij_tab_response "$dir" 5 99 "$parent_title"
+  printf '[]\n' > "$dir/responses/6.out"
+  printf '[]\n' > "$dir/responses/7.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_ROOT_OVERRIDE="$ROOT" \
@@ -909,7 +914,9 @@ test_forced_secondmate_teardown_kills_zellij_children_with_child_home_tag() {
   expect_code 0 "$status" "fm-teardown should force-retire a secondmate with a zellij child: $out"
   assert_contains "$(cat "$dir/log")" $'\x1f''close-tab-by-id'$'\x1f''4' \
     "forced secondmate teardown did not close a child zellij tab scoped to the child home"
-  pass "fm-teardown.sh: force cleanup kills zellij children using the child home tag"
+  assert_contains "$(cat "$dir/log")" $'\x1f''close-tab-by-id'$'\x1f''99' \
+    "forced secondmate teardown did not close the parent-owned secondmate zellij tab"
+  pass "fm-teardown.sh: Zellij children use the child home while secondmate endpoints remain parent-owned"
 }
 
 # --- send_text_submit: delta-based verify-and-retry --------------------------

@@ -876,7 +876,7 @@ test_window_of_workspace_empty_when_not_found() {
 }
 
 test_task_binding_status_requires_scoped_home_or_absence() {
-  local dir fb status title
+  local dir fb status title out
   dir="$TMP_ROOT/task-binding-absent"; mkdir -p "$dir/responses"
   cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 1
   cmux_workspace_list_response "$dir" 2 "ffffffff-0000-0000-0000-000000000000" "other"
@@ -900,6 +900,36 @@ test_task_binding_status_requires_scoped_home_or_absence() {
     status=$?
   fi
   [ "$status" = 1 ] || fail "live foreign cmux workspace should return unsafe status 1, got $status"
+
+  dir="$TMP_ROOT/task-binding-relaunched-workspace"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-task1)
+  cmux_windows_response "$dir" 1 \
+    "eeeeeeee-0000-0000-0000-000000000000" 1 \
+    "ffffffff-0000-0000-0000-000000000000" 1
+  cmux_workspace_list_response "$dir" 2 "99999999-0000-0000-0000-000000000000" "other"
+  cmux_workspace_list_response "$dir" 3 "dddddddd-3333-3333-3333-333333333333" "$title"
+  cmux_panes_response "$dir" 4 "cccccccc-2222-2222-2222-222222222222"
+  fb=$(make_cmux_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_task_binding_status "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-task1; printf "%s" "$FM_BACKEND_CMUX_RESOLVED_TARGET"' "$ROOT") \
+    || fail "unique relaunched cmux workspace was not cleanup-authoritative"
+  [ "$out" = "dddddddd-3333-3333-3333-333333333333:cccccccc-2222-2222-2222-222222222222" ] \
+    || fail "relaunched cmux workspace did not resolve its exact replacement target: $out"
+
+  dir="$TMP_ROOT/task-binding-duplicate-relaunch"; mkdir -p "$dir/responses"
+  title=$(cmux_expected_scoped_title fm-task1)
+  cmux_windows_response "$dir" 1 "eeeeeeee-0000-0000-0000-000000000000" 2
+  cmux_workspace_list_response "$dir" 2 \
+    "dddddddd-3333-3333-3333-333333333333" "$title" \
+    "ffffffff-4444-4444-4444-444444444444" "$title"
+  fb=$(make_cmux_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_CMUX_LOG="$dir/log" FM_CMUX_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/cmux.sh"; fm_backend_cmux_task_binding_status "aaaaaaaa-0000-0000-0000-000000000000:bbbbbbbb-1111-1111-1111-111111111111" fm-task1' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 1 ] || fail "duplicate relaunched cmux workspaces should return unsafe status 1, got $status"
 
   dir="$TMP_ROOT/task-binding-stale-surface"; mkdir -p "$dir/responses"
   title=$(cmux_expected_scoped_title fm-task1)

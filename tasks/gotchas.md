@@ -17,3 +17,6 @@
 - Focused lint includes informational ShellCheck findings, so test assertions containing literal shell expansions must escape them and dynamic test overrides need local lint annotations.
 - Keep workflow-ledger hunks out of multi-file source patches because stale task text otherwise rejects every unrelated hunk atomically.
 - Producer-side output globals need an explicit local read so focused ShellCheck recognizes their cross-file consumers.
+- Collaboration waits require at least 10000 milliseconds even for a quick mailbox poll.
+- Preserve shell `case` pattern lines without trailing spaces when extending long regression fixture lists.
+- Test stubs that set cross-function output globals need an explicit local read for focused ShellCheck.

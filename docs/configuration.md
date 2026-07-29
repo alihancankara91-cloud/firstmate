@@ -82,11 +82,13 @@ These five sentences are the single owner of the task-selector vocabulary; backe
 Missing, empty, duplicate, malformed, backend-inconsistent, or task-mismatched endpoint records are preserved and refused.
 Legacy tmux metadata remains cleanup-compatible when its exact window name is `fm-<id>`.
 For a legacy opaque record without `endpoint_task_id=`, teardown takes the task's spawn lock and requires its recorded worktree to be a project-registered worktree on exact branch `fm/<id>` or an exact marked secondmate home.
-Pathless pre-launch Orca recovery instead requires `orca_recovery=worktree-only`, resolves the durable Orca worktree id to its exact project-registered path, and requires Orca's native pre-launch `fm-<id>` branch identity.
+Pathless pre-launch Orca recovery resolves the durable Orca worktree id to its exact project-registered path and requires Orca's native pre-launch `fm-<id>` branch identity.
+That exact proof admits both historical markerless abort records and later records carrying `orca_recovery=worktree-only`.
 A live Herdr endpoint is cleanup-authoritative only inside the owning home's workspace or through an exact version-2 presentation journal, while Zellij and cmux require the owning home's scoped title.
-Secondmate endpoint ownership is derived from its exact marked `home=` for both migration and removal, including nested secondmates.
+Herdr secondmate endpoint ownership is derived from its exact marked `home=` for both migration and removal, including nested secondmates.
+Zellij secondmate endpoints remain scoped to the state-owning parent home that spawned them, while their ordinary child tasks use the child home.
 Authoritative absence means the owning-home Herdr task tab, Zellij task tab, or cmux task workspace is absent, not merely that a recorded pane or surface changed.
-Zellij closes an exact scoped task tab despite a stale pane, cmux safely reacquires one replacement surface before closing an exact scoped workspace, and an unresolved live Herdr task tab fails closed.
+Zellij closes an exact scoped task tab despite a stale pane, cmux atomically migrates to one unique scoped replacement workspace and surface before cleanup, and an unresolved live Herdr task tab fails closed.
 Only when the owning task container is authoritatively absent does migration record `skip-endpoint` while keeping the proven worktree cleanup usable.
 An unreadable inventory, a live bare Zellij title, or a live crossed or foreign endpoint fails closed without cleanup.
 Orca resolves even an empty legacy `worktree=` from its durable worktree id, applies the normal or pathless recovery proof above, writes the resolved path into the migrated record, and disables terminal cleanup.

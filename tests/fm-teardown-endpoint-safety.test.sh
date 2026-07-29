@@ -133,7 +133,7 @@ test_legacy_worktree_provenance() {
   fm_git_worktree "$orca_project" "$orca_worktree" "fm-$id"
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=fm-$id" "terminal=legacy-terminal" "worktree=" "project=$orca_project" \
-    "backend=orca" "orca_recovery=worktree-only" "orca_worktree_id=orca-worktree-id"
+    "backend=orca" "orca_worktree_id=orca-worktree-id"
   fm_backend_worktree_path() {
     [ "$1:$2" = orca:orca-worktree-id ] || return 1
     printf '%s' "$orca_worktree"
@@ -148,7 +148,7 @@ test_legacy_worktree_provenance() {
   id=legacy-pathless-crossed
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=fm-$id" "worktree=" "project=$orca_project" \
-    "backend=orca" "orca_recovery=worktree-only" "orca_worktree_id=orca-worktree-id"
+    "backend=orca" "orca_worktree_id=orca-worktree-id"
   ! fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" "$dir/home" "$ROOT" 2>/dev/null \
     || fail "pathless Orca recovery accepted another task's native fm-<id> worktree"
   pass "legacy cleanup identity: exact registered worktrees authenticate recorded and pathless Orca cleanup"
@@ -173,9 +173,21 @@ test_secondmate_endpoint_ownership_uses_marked_home() {
   printf 'other-owner\n' > "$dir/home/.fm-secondmate-home"
   ! fm_backend_task_endpoint_ownership "$dir/home/state/$id.meta" "$id" "$ROOT" "$ROOT" \
     || fail "secondmate endpoint ownership accepted a crossed home marker"
+
+  printf '%s\n' "$id" > "$dir/home/.fm-secondmate-home"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:7" "endpoint_task_id=$id" "worktree=$dir/home" "project=$dir/project" \
+    "kind=secondmate" "home=$dir/home" "backend=zellij" \
+    "zellij_session=firstmate" "zellij_tab_id=3" "zellij_pane_id=7"
+  fm_backend_task_endpoint_ownership "$dir/home/state/$id.meta" "$id" "$ROOT" "$ROOT" \
+    || fail "marked Zellij secondmate endpoint ownership was not authenticated"
+  [ "$FM_BACKEND_ENDPOINT_OWNING_HOME" = "$(cd "$ROOT" && pwd -P)" ] \
+    || fail "Zellij secondmate endpoint ownership left its state-owning parent home"
+  [ "$FM_BACKEND_ENDPOINT_OWNING_ROOT" = "$(cd "$ROOT" && pwd -P)" ] \
+    || fail "Zellij secondmate endpoint ownership left its state-owning parent root"
   assert_contains "$(<"$ROOT/bin/fm-teardown.sh")" "\$ENDPOINT_HOME\" \"\$ENDPOINT_ROOT" \
     "top-level teardown does not pass authenticated endpoint ownership to removal"
-  pass "secondmate endpoint identity: validation and removal use the exact marked home"
+  pass "secondmate endpoint identity: Herdr uses the child home while Zellij remains parent-owned"
 }
 
 test_legacy_endpoint_status_uses_owning_home() {
@@ -256,7 +268,7 @@ test_supported_backend_endpoint_records_validate() {
 
   fm_backend_legacy_worktree_matches() {
     case "$2" in
-      legacy-herdr|legacy-zellij|legacy-orca|legacy-orca-recovery|legacy-cmux|legacy-crossed|legacy-dead-*) 
+      legacy-herdr|legacy-zellij|legacy-orca|legacy-orca-recovery|legacy-cmux|legacy-cmux-relaunch|legacy-crossed|legacy-dead-*)
         if [ "$2" = legacy-orca-recovery ]; then
           FM_BACKEND_LEGACY_RESOLVED_WORKTREE=$dir/worktree
         else
@@ -271,6 +283,11 @@ test_supported_backend_endpoint_records_validate() {
   fm_backend_legacy_endpoint_status() {
     case "$2:$3" in
       legacy-herdr:herdr|legacy-zellij:zellij|legacy-cmux:cmux)
+        return 0
+        ;;
+      legacy-cmux-relaunch:cmux)
+        FM_BACKEND_LEGACY_RESOLVED_TARGET=workspace-new:surface-new
+        : "$FM_BACKEND_LEGACY_RESOLVED_TARGET"
         return 0
         ;;
       legacy-dead-herdr:herdr|legacy-dead-zellij:zellij|legacy-dead-cmux:cmux)
@@ -323,6 +340,16 @@ test_supported_backend_endpoint_records_validate() {
   ! fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null || fail "unmigrated legacy cmux endpoint passed current validation"
   fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "proven legacy cmux endpoint did not migrate"
   assert_grep "endpoint_task_id=$id" "$dir/home/state/$id.meta" "legacy cmux migration omitted task binding"
+
+  id=legacy-cmux-relaunch
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=workspace-old:surface-old" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=cmux" "cmux_workspace_id=workspace-old" "cmux_surface_id=surface-old"
+  fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" \
+    || fail "proven relaunched cmux endpoint did not migrate"
+  assert_grep "window=workspace-new:surface-new" "$dir/home/state/$id.meta" "cmux migration retained its stale target"
+  assert_grep "cmux_workspace_id=workspace-new" "$dir/home/state/$id.meta" "cmux migration retained its stale workspace"
+  assert_grep "cmux_surface_id=surface-new" "$dir/home/state/$id.meta" "cmux migration retained its stale surface"
 
   for backend in herdr zellij cmux; do
     id=legacy-dead-$backend
