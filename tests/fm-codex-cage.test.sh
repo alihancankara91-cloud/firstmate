@@ -30,6 +30,12 @@ test_profile_security_contract() {
   assert_grep '(deny default)' "$PROFILE" "Seatbelt profile must deny by default"
   assert_grep '(with-filter (process-path codex-native)' "$PROFILE" \
     "only the Codex native process may receive CODEX_HOME access"
+  assert_grep '(literal global-rules-file)' "$PROFILE" \
+    "only the exact resolved global-rules file may be readable"
+  assert_contains "$native_scope" '(literal global-rules-file)' \
+    "global-rules access must stay inside the native Codex process filter"
+  [ "$(grep -Fc '(literal global-rules-file)' "$PROFILE")" -eq 1 ] \
+    || fail "global-rules file must have exactly one native read allowance"
   assert_grep '(remote ip "localhost:*")' "$PROFILE" \
     "Seatbelt profile must block every loopback TCP destination"
   assert_grep '(literal no-mistakes-socket)' "$PROFILE" \
@@ -102,7 +108,7 @@ SH
 }
 
 test_wrapper_sanitizes_environment_and_binds_exact_paths() {
-  local copy_dir fixture main_home task_data state fake_root fake_exec out rc args captured_env gh_path
+  local copy_dir fixture main_home task_data state fake_root fake_exec synthetic_home rules_file out rc args captured_env gh_path
   copy_dir="$TMP_ROOT/copy"
   fixture="$TMP_ROOT/repo"
   main_home="$TMP_ROOT/main-home"
@@ -110,7 +116,15 @@ test_wrapper_sanitizes_environment_and_binds_exact_paths() {
   state="$main_home/state"
   fake_root="$TMP_ROOT/fake-codex"
   fake_exec="$TMP_ROOT/fake-sandbox-exec"
-  mkdir -p "$copy_dir" "$task_data" "$state"
+  synthetic_home="$TMP_ROOT/synthetic-home"
+  rules_file="$synthetic_home/.claude/CLAUDE.md"
+  mkdir -p "$copy_dir" "$task_data" "$state" \
+    "$synthetic_home/.codex" "$synthetic_home/.claude"
+  printf 'synthetic canonical rules\n' >"$rules_file"
+  ln -s .claude/CLAUDE.md "$synthetic_home/AGENTS.md"
+  ln -s ../.claude/CLAUDE.md "$synthetic_home/.codex/AGENTS.md"
+  ln -s .claude/CLAUDE.md "$synthetic_home/.agents.md"
+  rules_file="$(cd "$(dirname "$rules_file")" && pwd -P)/$(basename "$rules_file")"
   cp "$CAGE" "$copy_dir/fm-codex-cage.sh"
   cp "$PROFILE" "$copy_dir/fm-codex-cage.sb"
   cp "$GH_PUBLIC_CLONE" "$copy_dir/fm-gh-public-clone.sh"
@@ -126,6 +140,7 @@ test_wrapper_sanitizes_environment_and_binds_exact_paths() {
   set +e
   out=$(
     cd "$fixture" && \
+      HOME="$synthetic_home" CODEX_HOME="$synthetic_home/.codex" \
       PATH="$fake_root/bin:$PATH" FM_CAGE_TEST_SECRET=must-not-cross \
       "$copy_dir/fm-codex-cage.sh" \
         --worktree "$fixture" \
@@ -153,6 +168,8 @@ test_wrapper_sanitizes_environment_and_binds_exact_paths() {
     "wrapper did not bind the exact main-home turn-end path"
   assert_contains "$args" "TLS_TRUST_DIR=/private/etc/ssl" \
     "wrapper did not bind the exact macOS TLS trust directory"
+  assert_contains "$args" "GLOBAL_RULES_FILE=$rules_file" \
+    "wrapper did not resolve the three global-rules aliases to one exact file"
   assert_contains "$args" "--dangerously-bypass-approvals-and-sandbox" \
     "wrapper did not preserve the Codex execution posture"
   assert_not_contains "$captured_env" "FM_CAGE_TEST_SECRET" \
@@ -175,6 +192,169 @@ test_wrapper_sanitizes_environment_and_binds_exact_paths() {
   assert_contains "$gh_path" "/bin/gh" \
     "login shells do not resolve the credential-free gh helper"
   pass "wrapper sanitizes the environment and binds only exact task paths"
+}
+
+test_wrapper_refuses_missing_and_unsafe_global_rules_targets() {
+  local copy_dir fixture main_home task_data state fake_root fake_exec synthetic_home outside out rc
+  copy_dir="$TMP_ROOT/refusal-copy"
+  fixture="$TMP_ROOT/refusal-repo"
+  main_home="$TMP_ROOT/refusal-main-home"
+  task_data="$main_home/data/cage-refusal"
+  state="$main_home/state"
+  fake_root="$TMP_ROOT/refusal-fake-codex"
+  fake_exec="$TMP_ROOT/refusal-fake-sandbox-exec"
+  synthetic_home="$TMP_ROOT/refusal-home"
+  outside="$TMP_ROOT/outside-rules"
+  mkdir -p "$copy_dir" "$task_data" "$state" \
+    "$synthetic_home/.codex" "$synthetic_home/.claude" "$outside"
+  cp "$CAGE" "$copy_dir/fm-codex-cage.sh"
+  cp "$PROFILE" "$copy_dir/fm-codex-cage.sb"
+  cp "$GH_PUBLIC_CLONE" "$copy_dir/fm-gh-public-clone.sh"
+  make_fake_cage_fixture "$fixture" "$fake_root" "$fake_exec"
+  sed -i.bak "s#^SANDBOX_EXEC=/usr/bin/sandbox-exec\$#SANDBOX_EXEC='$fake_exec'#" \
+    "$copy_dir/fm-codex-cage.sh"
+  chmod +x "$copy_dir/fm-codex-cage.sh"
+
+  ln -s ../.claude/CLAUDE.md "$synthetic_home/.codex/AGENTS.md"
+  set +e
+  out=$(cd "$fixture" && HOME="$synthetic_home" CODEX_HOME="$synthetic_home/.codex" \
+    PATH="$fake_root/bin:$PATH" "$copy_dir/fm-codex-cage.sh" \
+      --worktree "$fixture" --task-data-dir "$task_data" \
+      --status-path "$state/cage-refusal.status" --fm-home "$main_home" \
+      -- codex 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "a missing global-rules target must stop the launch"
+  assert_contains "$out" "global rules target is missing or not a regular file" \
+    "missing global-rules refusal is not actionable"
+
+  rm "$synthetic_home/.codex/AGENTS.md"
+  printf 'not an approved canonical location\n' >"$outside/CLAUDE.md"
+  ln -s "$outside/CLAUDE.md" "$synthetic_home/.codex/AGENTS.md"
+  set +e
+  out=$(cd "$fixture" && HOME="$synthetic_home" CODEX_HOME="$synthetic_home/.codex" \
+    PATH="$fake_root/bin:$PATH" "$copy_dir/fm-codex-cage.sh" \
+      --worktree "$fixture" --task-data-dir "$task_data" \
+      --status-path "$state/cage-refusal.status" --fm-home "$main_home" \
+      -- codex 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "an unsafe global-rules target must stop the launch"
+  assert_contains "$out" "global rules target is outside the approved canonical locations" \
+    "unsafe global-rules refusal is not actionable"
+
+  rm "$synthetic_home/.codex/AGENTS.md"
+  printf 'canonical rules\n' >"$synthetic_home/.claude/CLAUDE.md"
+  printf 'conflicting approved rules\n' >"$synthetic_home/AGENTS.md"
+  ln -s ../.claude/CLAUDE.md "$synthetic_home/.codex/AGENTS.md"
+  set +e
+  out=$(cd "$fixture" && HOME="$synthetic_home" CODEX_HOME="$synthetic_home/.codex" \
+    PATH="$fake_root/bin:$PATH" "$copy_dir/fm-codex-cage.sh" \
+      --worktree "$fixture" --task-data-dir "$task_data" \
+      --status-path "$state/cage-refusal.status" --fm-home "$main_home" \
+      -- codex 2>&1)
+  rc=$?
+  set -e
+  expect_code 2 "$rc" "conflicting approved global-rules targets must stop the launch"
+  assert_contains "$out" "global rules aliases resolve to conflicting files" \
+    "conflicting global-rules refusal is not actionable"
+  pass "wrapper refuses missing, unsafe, and conflicting global-rules targets"
+}
+
+test_native_only_exact_global_rules_read() {
+  local seatbelt_root worktree git_dir task_data status notify cage_tmp codex_home rules sibling out rc
+  [ "$(/usr/bin/uname -s)" = Darwin ] || {
+    echo "skip: exact global-rules Seatbelt probe requires macOS"
+    return 0
+  }
+  /usr/bin/sandbox-exec -p '(version 1)(allow default)' /usr/bin/true \
+    || fail "exact global-rules probe must run outside an existing Seatbelt sandbox"
+
+  seatbelt_root="$TMP_ROOT/seatbelt-rules"
+  mkdir -p "$seatbelt_root"
+  seatbelt_root=$(cd "$seatbelt_root" && pwd -P)
+  worktree="$seatbelt_root/worktree"
+  git_dir="$worktree/.git"
+  task_data="$seatbelt_root/task-data"
+  status="$seatbelt_root/status"
+  notify="$seatbelt_root/notify"
+  cage_tmp="$seatbelt_root/cage-tmp"
+  codex_home="$seatbelt_root/codex-home"
+  rules="$seatbelt_root/captain-home/.claude/CLAUDE.md"
+  sibling="$seatbelt_root/captain-home/.claude/credential.txt"
+  mkdir -p "$git_dir" "$task_data" "$cage_tmp" "$codex_home" "$(dirname "$rules")"
+  printf 'synthetic canonical rules\n' >"$rules"
+  printf 'synthetic credential\n' >"$sibling"
+
+  out=$(/usr/bin/sandbox-exec -f "$PROFILE" \
+    -D "WORKTREE=$worktree" -D "GIT_DIR=$git_dir" \
+    -D "GIT_COMMON_DIR=$git_dir" -D "TASK_DATA_DIR=$task_data" \
+    -D "STATUS_PATH=$status" -D "NOTIFY_PATH=$notify" \
+    -D "CAGE_TMP=$cage_tmp" -D "CODEX_HOME=$codex_home" \
+    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "CODEX_NATIVE=/usr/bin/head" \
+    -D "CODEX_INSTALL_ROOT=/usr/bin" -D "LOCAL_BIN_DIR=/usr/bin" \
+    -D "NPX_ROOT=/usr/bin" -D "NO_MISTAKES_BIN_DIR=/usr/bin" \
+    -D "NO_MISTAKES_SOCKET=/dev/null" -D "GLOBAL_RULES_FILE=$rules" \
+    /usr/bin/head -n 1 "$rules" 2>&1) \
+    || fail "native process could not read the exact global-rules file: $out"
+  [ "$out" = "synthetic canonical rules" ] \
+    || fail "native global-rules read returned unexpected content: $out"
+
+  set +e
+  out=$(/usr/bin/sandbox-exec -f "$PROFILE" \
+    -D "WORKTREE=$worktree" -D "GIT_DIR=$git_dir" \
+    -D "GIT_COMMON_DIR=$git_dir" -D "TASK_DATA_DIR=$task_data" \
+    -D "STATUS_PATH=$status" -D "NOTIFY_PATH=$notify" \
+    -D "CAGE_TMP=$cage_tmp" -D "CODEX_HOME=$codex_home" \
+    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "CODEX_NATIVE=/usr/bin/head" \
+    -D "CODEX_INSTALL_ROOT=/usr/bin" -D "LOCAL_BIN_DIR=/usr/bin" \
+    -D "NPX_ROOT=/usr/bin" -D "NO_MISTAKES_BIN_DIR=/usr/bin" \
+    -D "NO_MISTAKES_SOCKET=/dev/null" -D "GLOBAL_RULES_FILE=$rules" \
+    /usr/bin/head -n 1 "$sibling" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "native process read a sibling of the bound rules file"
+  assert_contains "$out" "Operation not permitted" \
+    "exact-file probe did not receive an operating-system denial"
+
+  set +e
+  # shellcheck disable=SC2016  # The caged shell expands its positional argument.
+  out=$(/usr/bin/sandbox-exec -f "$PROFILE" \
+    -D "WORKTREE=$worktree" -D "GIT_DIR=$git_dir" \
+    -D "GIT_COMMON_DIR=$git_dir" -D "TASK_DATA_DIR=$task_data" \
+    -D "STATUS_PATH=$status" -D "NOTIFY_PATH=$notify" \
+    -D "CAGE_TMP=$cage_tmp" -D "CODEX_HOME=$codex_home" \
+    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "CODEX_NATIVE=/bin/zsh" \
+    -D "CODEX_INSTALL_ROOT=/usr/bin" -D "LOCAL_BIN_DIR=/usr/bin" \
+    -D "NPX_ROOT=/usr/bin" -D "NO_MISTAKES_BIN_DIR=/usr/bin" \
+    -D "NO_MISTAKES_SOCKET=/dev/null" -D "GLOBAL_RULES_FILE=$rules" \
+    /bin/zsh -c 'printf changed > "$1"' _ "$rules" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the native process wrote the bound global-rules file"
+  assert_contains "$out" "operation not permitted" \
+    "native write probe did not receive an operating-system denial"
+  [ "$(cat "$rules")" = "synthetic canonical rules" ] \
+    || fail "the denied native write changed the global-rules file"
+
+  set +e
+  # shellcheck disable=SC2016  # The caged shell expands its positional argument.
+  out=$(/usr/bin/sandbox-exec -f "$PROFILE" \
+    -D "WORKTREE=$worktree" -D "GIT_DIR=$git_dir" \
+    -D "GIT_COMMON_DIR=$git_dir" -D "TASK_DATA_DIR=$task_data" \
+    -D "STATUS_PATH=$status" -D "NOTIFY_PATH=$notify" \
+    -D "CAGE_TMP=$cage_tmp" -D "CODEX_HOME=$codex_home" \
+    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "CODEX_NATIVE=/usr/bin/head" \
+    -D "CODEX_INSTALL_ROOT=/usr/bin" -D "LOCAL_BIN_DIR=/usr/bin" \
+    -D "NPX_ROOT=/usr/bin" -D "NO_MISTAKES_BIN_DIR=/usr/bin" \
+    -D "NO_MISTAKES_SOCKET=/dev/null" -D "GLOBAL_RULES_FILE=$rules" \
+    /bin/zsh -c 'IFS= read -r line < "$1"' _ "$rules" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a child shell directly read the bound global-rules file"
+  assert_contains "$out" "operation not permitted" \
+    "child-shell probe did not receive an operating-system denial"
+  pass "only the native process reads the exact rules file while siblings and child shells remain denied"
 }
 
 test_public_github_clone_helper() {
@@ -256,6 +436,8 @@ test_profile_security_contract
 test_wrapper_fails_closed_on_invalid_scope
 if [ "$(/usr/bin/uname -s)" = Darwin ]; then
   test_wrapper_sanitizes_environment_and_binds_exact_paths
+  test_wrapper_refuses_missing_and_unsafe_global_rules_targets
+  test_native_only_exact_global_rules_read
 fi
 test_public_github_clone_helper
 test_live_harness_preserves_evidence

@@ -37,7 +37,8 @@ The environment is rebuilt from a non-secret allowlist rather than inherited fro
 Seatbelt denies by default and then grants these task capabilities:
 
 - System runtimes, developer tools, the Codex installation, the task worktree, its Git metadata, the exact task data directory, exact lifecycle files, and the cage's private temporary directory are readable.
-- Only the signed native Codex process can read and write `CODEX_HOME`, so Codex can authenticate while model-launched shells cannot read its credential store.
+- Only the discovered native Codex executable can read and write `CODEX_HOME`, so Codex can authenticate while model-launched shells cannot read its credential store.
+- For a resolved rules file outside `CODEX_HOME`, that native process receives only exact-file read access, with no containing-directory or write grant.
 - Writes are limited to the task worktree, its Git metadata, `data/<id>`, the exact `state/<id>.status`, the exact turn-end file, and the cage's private temporary directory.
 - Outbound internet access remains available for Codex and public Git operations.
 - Every loopback TCP destination is denied, including already-running Chrome remote-debugging ports.
@@ -57,6 +58,119 @@ The investigation used `gh` CLI clones and local Git inspection rather than a br
 - No fetchable cage implementation was present in Kun's inspected public Firstmate, no-mistakes, Treehouse, or dotfiles repositories.
 
 Firstmate therefore matches Kun's public Codex posture and supplies the closest standard macOS implementation for the missing external layer: a deny-first `sandbox-exec` Seatbelt profile.
+
+## Global-rules symlink regression evidence
+
+- Date: 2026-07-29.
+- Host: macOS 26.5.2.
+- Codex: `codex-cli 0.145.0`.
+- Vulnerable base: `20223234e9b61d6c5ecc8dcb373ffde988404531`.
+- The initiating trigger was changing the discovered global-rules aliases from files below `CODEX_HOME` to symlinks whose resolved target was `~/.claude/CLAUDE.md`.
+- The masking condition was either running without the external cage or pointing the same alias at a file below `CODEX_HOME`.
+- The kernel-visible symptom was `Operation not permitted` when the native Codex process followed `~/.codex/AGENTS.md` to the external target.
+
+The three aliases on the affected host had this exact topology:
+
+```text
+/Users/ackinvestment/AGENTS.md -> /Users/ackinvestment/.claude/CLAUDE.md
+/Users/ackinvestment/.codex/AGENTS.md -> /Users/ackinvestment/.claude/CLAUDE.md
+/Users/ackinvestment/.agents.md -> /Users/ackinvestment/.claude/CLAUDE.md
+```
+
+The deterministic reproduction created a synthetic home with `.codex/AGENTS.md -> ../.claude/CLAUDE.md` and ran this exact fixture and probe:
+
+```sh
+probe_root=$(mktemp -d "$PWD/.fm-cage-repro.XXXXXX")
+home="$probe_root/home"
+worktree="$probe_root/worktree"
+mkdir -p "$home/.codex" "$home/.claude" "$worktree/.git" \
+  "$probe_root/task-data" "$probe_root/cage-tmp"
+printf 'SYNTHETIC_CANONICAL_RULES\n' >"$home/.claude/CLAUDE.md"
+ln -s ../.claude/CLAUDE.md "$home/.codex/AGENTS.md"
+printf 'uncaged='; /usr/bin/head -n 1 "$home/.codex/AGENTS.md"
+run_probe() {
+  /usr/bin/sandbox-exec -f bin/fm-codex-cage.sb \
+    -D "WORKTREE=$worktree" \
+    -D "GIT_DIR=$worktree/.git" \
+    -D "GIT_COMMON_DIR=$worktree/.git" \
+    -D "TASK_DATA_DIR=$probe_root/task-data" \
+    -D "STATUS_PATH=$probe_root/status" \
+    -D "NOTIFY_PATH=$probe_root/notify" \
+    -D "CAGE_TMP=$probe_root/cage-tmp" \
+    -D "CODEX_HOME=$home/.codex" \
+    -D "TLS_TRUST_DIR=/private/etc/ssl" \
+    -D "CODEX_NATIVE=/usr/bin/head" \
+    -D "CODEX_INSTALL_ROOT=/usr/bin" \
+    -D "LOCAL_BIN_DIR=/usr/bin" \
+    -D "NPX_ROOT=/usr/bin" \
+    -D "NO_MISTAKES_BIN_DIR=/usr/bin" \
+    -D "NO_MISTAKES_SOCKET=/dev/null" \
+    /usr/bin/head -n 1 "$1" 2>&1
+}
+set +e
+denied=$(run_probe "$home/.codex/AGENTS.md")
+denied_rc=$?
+set -e
+printf 'caged-external-target-exit=%s output=%s\n' "$denied_rc" "$denied"
+```
+
+The exact baseline output was:
+
+```text
+uncaged=SYNTHETIC_CANONICAL_RULES
+caged-external-target-exit=1 output=head: /Users/ackinvestment/.treehouse/firstmate-3aecb2/2/firstmate/.fm-cage-repro.PlR5na/home/.codex/AGENTS.md: Operation not permitted
+```
+
+The smallest counterfactual changed only the symlink target to a file below the same synthetic `CODEX_HOME`.
+Its exact output was:
+
+```text
+smallest-counterfactual-exit=0 output=SYNTHETIC_IN_HOME_RULES
+```
+
+That comparison identifies the earliest relevant denial as the resolved external target rather than the alias or Codex executable.
+A current-base `codex exec` launch did not reproduce the previously reported immediate process exit.
+It started successfully but emitted `warning: Failed to read global AGENTS.md instructions from /Users/ackinvestment/.codex/AGENTS.md: Operation not permitted (os error 1)`.
+The earliest denial in that current Codex startup log was the `.agents/skills` directory, before the global-rules warning.
+That denial remained after the fix while Codex started successfully, disproving it as the cause of the global-rules read failure.
+The same launch also preserved disconfirming evidence that shell-snapshot validation and the project hooks configuration were denied independently, so those surfaces were not opened as part of this fix.
+
+The wrapper now resolves only `~/AGENTS.md`, `$CODEX_HOME/AGENTS.md`, and `~/.agents.md`, requires every present alias to resolve to the same approved canonical file, and refuses broken, non-regular, unreadable, conflicting, or outside targets.
+The Seatbelt profile grants only the native Codex executable read and existence checks for that exact resolved file.
+For the affected external `~/.claude/CLAUDE.md` target, it does not grant the containing directory or write access, and model-launched child shells still receive an operating-system denial for the same file.
+
+The focused verification commands were:
+
+```sh
+tests/fm-codex-cage.test.sh
+FM_CODEX_CAGE_LIVE_E2E=1 tests/fm-codex-cage-live-e2e.test.sh
+bin/fm-codex-cage.sh \
+  --worktree "$PWD" \
+  --task-data-dir /Users/ackinvestment/firstmate/data/fm-codex-cage-global-rules-symlink \
+  --status-path /Users/ackinvestment/firstmate/state/fm-codex-cage-global-rules-symlink.status \
+  --fm-home /Users/ackinvestment/firstmate \
+  -- codex exec --ephemeral --skip-git-repo-check \
+    --dangerously-bypass-approvals-and-sandbox 'Reply exactly CAGE_STARTED.'
+```
+
+The exact focused-test result was:
+
+```text
+ok - Seatbelt profile pins TLS trust, credential, browser, loopback, and broker boundaries
+ok - wrapper rejects missing worktrees and relative lifecycle paths
+ok - wrapper sanitizes the environment and binds only exact task paths
+ok - wrapper refuses missing, unsafe, and conflicting global-rules targets
+ok - only the native process reads the exact rules file while siblings and child shells remain denied
+ok - public gh helper clones without credentials and rejects authenticated operations
+ok - live harness prints evidence on both paths and preserves failed runs
+ok - both Codex spawn templates require bypass mode inside the external cage
+exit=0
+```
+
+The post-fix live launch returned `CAGE_STARTED`, exited `0`, and no longer emitted the global-rules warning.
+The full acceptance run returned `ok - bypass-mode Codex is externally caged while task work, GitHub, main-home status/report delivery, and turn-end remain available` and exited `0`.
+Its child-process evidence retained operating-system denials for the captain's SSH directory, configuration directory, shell startup file, synthetic AWS credential, Codex credential, and GitHub credential.
+The unrelated skills, shell-snapshot, and project-hooks denials remained present, confirming the allowance did not broaden to those startup paths.
 
 ## Live acceptance evidence
 
