@@ -9,7 +9,7 @@
 # cwd inside the recorded worktree or task temp root.
 #
 # Safety is deliberately conservative. A process is terminated only when it is
-# a Chrome-family process with the Puppeteer profile marker and either:
+# a Chrome-family process and either:
 #   - --task <id>: its profile or process ancestry ties it to that task's
 #     recorded worktree, task temp root, or browser temp root; or
 #   - periodic mode: its profile ties it to this home's browser temp namespace
@@ -59,9 +59,12 @@ COLUMNS=10000 LC_ALL=C ps -axo pid=,ppid=,command= > "$SNAPSHOT" || {
 }
 
 is_browser_candidate() {  # <command>
-  case "$1" in *puppeteer_dev_chrome_profile*) ;; *) return 1 ;; esac
   case "$1" in
-    *'/Google Chrome'*|*'/Chromium'*|*'/chrome-headless-shell'*|*' chrome-headless-shell '*|*'/chrome '*|*' HeadlessChrome '*) return 0 ;;
+    *'/Google Chrome'*|*'/Chromium'*|*'/chrome-headless-shell'*|*' chrome-headless-shell '*|*'/chrome '*|*' HeadlessChrome '*) ;;
+    *) return 1 ;;
+  esac
+  case "$1" in
+    *puppeteer_dev_chrome_profile*|*'/chrome-headless-shell'*|*' chrome-headless-shell '*|*' HeadlessChrome '*|*'--headless'*) return 0 ;;
   esac
   return 1
 }
@@ -74,14 +77,14 @@ profile_from_command() {  # <command>
     token=${token#\'}
     token=${token%\'}
     if [ "$next" -eq 1 ]; then
-      case "$token" in *puppeteer_dev_chrome_profile*) printf '%s\n' "$token"; return 0 ;; esac
-      return 1
+      printf '%s\n' "$token"
+      return 0
     fi
     case "$token" in
       --user-data-dir=*)
         token=${token#--user-data-dir=}
-        case "$token" in *puppeteer_dev_chrome_profile*) printf '%s\n' "$token"; return 0 ;; esac
-        return 1
+        printf '%s\n' "$token"
+        return 0
         ;;
       --user-data-dir) next=1 ;;
     esac
@@ -129,41 +132,54 @@ cwd_for_pid() {  # <pid>
   return 1
 }
 
-ancestry_tied_to_root() {  # <pid> <root>
-  local pid=$1 root=$2 cwd ppid depth=0
-  [ -n "$root" ] || return 1
+CANDIDATE_PATHS=("")
+capture_candidate_paths() {  # <pid> <profile>
+  local pid=$1 profile=$2 cwd ppid depth=0 path known
+  CANDIDATE_PATHS=("$profile")
   while [ "$depth" -lt 32 ]; do
     cwd=$(cwd_for_pid "$pid" 2>/dev/null || true)
-    path_within "$cwd" "$root" && return 0
+    if [ -n "$cwd" ]; then
+      known=0
+      for path in "${CANDIDATE_PATHS[@]}"; do
+        [ "$path" = "$cwd" ] && { known=1; break; }
+      done
+      [ "$known" -eq 1 ] || CANDIDATE_PATHS+=("$cwd")
+    fi
     ppid=$(snapshot_ppid "$pid")
-    case "$ppid" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$ppid" -gt 1 ] || return 1
+    case "$ppid" in ''|*[!0-9]*) break ;; esac
+    [ "$ppid" -gt 1 ] || break
     pid=$ppid
     depth=$((depth + 1))
   done
-  return 1
 }
 
 meta_value() {  # <meta> <key>
   sed -n "s/^$2=//p" "$1" | tail -1
 }
 
-candidate_tied_to_meta() {  # <pid> <profile> <meta>
-  local pid=$1 profile=$2 meta=$3 root
+candidate_tied_to_meta() {  # <profile> <meta>
+  local profile=$1 meta=$2 root path browser_root
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 1
+  browser_root=$(meta_value "$meta" browsertmp)
+  case "$profile" in
+    */browser-firstmate-*/*|*/browser-2ndmate-*/*)
+      [ -n "$browser_root" ] && path_within "$profile" "$browser_root" || return 1
+      ;;
+  esac
   for root in "$(meta_value "$meta" browsertmp)" "$(meta_value "$meta" tasktmp)" "$(meta_value "$meta" worktree)"; do
     [ -n "$root" ] || continue
-    path_within "$profile" "$root" && return 0
-    ancestry_tied_to_root "$pid" "$root" && return 0
+    for path in "${CANDIDATE_PATHS[@]}"; do
+      path_within "$path" "$root" && return 0
+    done
   done
   return 1
 }
 
-live_meta_for_candidate() {  # <pid> <profile>
+live_meta_for_candidate() {  # <profile>
   local meta
   for meta in "$STATE"/*.meta; do
     [ -e "$meta" ] || continue
-    candidate_tied_to_meta "$1" "$2" "$meta" && { printf '%s\n' "$meta"; return 0; }
+    candidate_tied_to_meta "$1" "$meta" && { printf '%s\n' "$meta"; return 0; }
   done
   return 1
 }
@@ -251,14 +267,11 @@ while read -r pid ppid command; do
   [ "$pid" != "$$" ] || continue
   is_browser_candidate "$command" || continue
   profile=$(profile_from_command "$command" 2>/dev/null || true)
-  if [ -z "$profile" ]; then
-    echo "left browser pid=$pid reason=Puppeteer profile path could not be parsed"
-    continue
-  fi
+  capture_candidate_paths "$pid" "$profile"
 
   if [ "$MODE" = task ]; then
     meta="$STATE/$TASK_ID.meta"
-    if candidate_tied_to_meta "$pid" "$profile" "$meta"; then
+    if candidate_tied_to_meta "$profile" "$meta"; then
       reap_pid "$pid" "$command" "$TASK_ID" recorded-task || failures=$((failures + 1))
     else
       echo "left browser pid=$pid reason=not attributable to task $TASK_ID"
@@ -266,7 +279,7 @@ while read -r pid ppid command; do
     continue
   fi
 
-  if live_meta=$(live_meta_for_candidate "$pid" "$profile"); then
+  if live_meta=$(live_meta_for_candidate "$profile"); then
     echo "left browser pid=$pid task=$(basename "$live_meta" .meta) reason=task is still recorded"
     continue
   fi
@@ -276,7 +289,6 @@ while read -r pid ppid command; do
     *"$BROWSER_SEGMENT"/*)
       task_part=${profile%%"$BROWSER_SEGMENT"*}
       task_part=${task_part##*/}
-      task_part=${task_part#fm-}
       case "$task_part" in ''|*[!A-Za-z0-9._-]*) task_part=unknown ;; esac
       reap_pid "$pid" "$command" "$task_part" home-scoped-profile || failures=$((failures + 1))
       ;;

@@ -1142,15 +1142,14 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   validate_spawn_worktree "treehouse get" "$T"
 fi
 
-# Per-task temp root: /tmp/fm-<id>/ with Go's build temp nested at gotmp/ and
-# general task temp nested under a home-scoped browser directory. Puppeteer uses
-# TMPDIR for its `puppeteer_dev_chrome_profile-*` directory, so this makes every
-# automation Chrome command line attributable to both this task and this home.
-# The home tag prevents another Firstmate home with the same task id from being
-# mistaken for this one by the periodic browser reaper. fm-teardown removes the
-# whole root after reaping browsers.
-TASK_TMP="/tmp/fm-$ID"
-BROWSER_TMP="$TASK_TMP/browser-$(fm_backend_hometag)"
+# Per-task temp root: /tmp/fm-<home-tag>/<id>/ with Go's build temp nested at
+# gotmp/ and general task temp nested under a home-scoped browser directory.
+# Puppeteer uses TMPDIR for its `puppeteer_dev_chrome_profile-*` directory, so
+# this makes every automation Chrome command line attributable to both this task
+# and this home. fm-teardown removes the whole root after reaping browsers.
+HOME_TAG=$(fm_backend_hometag)
+TASK_TMP="/tmp/fm-$HOME_TAG/$ID"
+BROWSER_TMP="$TASK_TMP/browser-$HOME_TAG"
 mkdir -p "$TASK_TMP/gotmp" "$BROWSER_TMP"
 
 # Per-harness turn-end hook: a file that touches state/<id>.turn-ended when the
@@ -1274,6 +1273,10 @@ fi
 
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
+if [ -d "$STATE/$ID.meta" ]; then
+  echo "$STATE/$ID.meta: Is a directory" >&2
+  exit 1
+fi
 {
   echo "window=$META_WINDOW"
   echo "worktree=$WT"

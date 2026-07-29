@@ -1507,6 +1507,24 @@ test_teardown_reaps_task_browser_before_cleanup() {
   pass "fm-teardown reaps task-attributed Puppeteer browsers before cleanup"
 }
 
+test_recursive_cleanup_reaps_after_child_endpoint_removal() {
+  local first_line second_line metadata_line
+  # shellcheck disable=SC2016  # These are literal source-contract strings.
+  first_line=$(grep -n 'reap_task_browsers "$home" "$sub_state" "$child_id" "$home"' \
+    "$TEARDOWN" | sed -n '1s/:.*//p')
+  # shellcheck disable=SC2016  # These are literal source-contract strings.
+  second_line=$(grep -n 'reap_task_browsers "$home" "$sub_state" "$child_id" "$home"' \
+    "$TEARDOWN" | sed -n '2s/:.*//p')
+  # shellcheck disable=SC2016  # These are literal source-contract strings.
+  metadata_line=$(grep -n 'remove_grok_turnend_auth "$sub_state" "$child_id"' \
+    "$TEARDOWN" | sed -n '1s/:.*//p')
+  [ -n "$first_line" ] && [ -n "$second_line" ] \
+    || fail "recursive cleanup does not reap child browsers twice"
+  [ "$first_line" -lt "$second_line" ] && [ "$second_line" -lt "$metadata_line" ] \
+    || fail "recursive cleanup's second child reap is not before metadata removal"
+  pass "recursive cleanup reaps child browsers after endpoint and worktree removal"
+}
+
 test_local_only_fork_remote_allows
 test_endpoint_kill_is_verified_gone
 test_surviving_endpoint_warns_loudly
@@ -1521,6 +1539,7 @@ test_herdr_teardown_clears_escalation_marker
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_teardown_reaps_task_browser_before_cleanup
+test_recursive_cleanup_reaps_after_child_endpoint_removal
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows
