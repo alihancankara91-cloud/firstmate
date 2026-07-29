@@ -21,3 +21,4 @@
 - Preserve shell `case` pattern lines without trailing spaces when extending long regression fixture lists.
 - Test stubs that set cross-function output globals need an explicit local read for focused ShellCheck.
 - Invoke focused `tests/*.test.sh` files through Bash or `bin/fm-test-run.sh`; executable bits are not guaranteed for every test file.
+- `gh-axi pr list --fields` exposes only the fields shown by its current help; omit unsupported GitHub CLI field names.
