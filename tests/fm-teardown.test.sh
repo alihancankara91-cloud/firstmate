@@ -1479,6 +1479,34 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed() {
   pass "herdr projection teardown retains the stale journal and attempts no workspace cleanup when exact-pane close is unconfirmed"
 }
 
+test_teardown_reaps_task_browser_before_cleanup() {
+  local case_dir profile browser_pid
+  case_dir=$(make_case browser-reap)
+  write_meta "$case_dir" local-only ship
+  profile="$case_dir/generic/puppeteer_dev_chrome_profile-teardown"
+  mkdir -p "$profile"
+  (
+    cd "$case_dir/wt" || exit 1
+    exec bash -c 'trap "exit 0" TERM; while :; do sleep 1; done' \
+      /fixture/chrome-headless-shell "--user-data-dir=$profile"
+  ) &
+  browser_pid=$!
+  sleep 0.2
+
+  if ! FM_BROWSER_REAP_GRACE_SECS=1 run_teardown "$case_dir" --force \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"; then
+    kill -KILL "$browser_pid" 2>/dev/null || true
+    wait "$browser_pid" 2>/dev/null || true
+    fail "browser-reap: forced teardown failed"
+  fi
+  wait "$browser_pid" 2>/dev/null || true
+  kill -0 "$browser_pid" 2>/dev/null \
+    && fail "teardown left a Puppeteer browser attributed by task worktree cwd"
+  assert_grep "reaped browser pid=$browser_pid task=task-x1" "$case_dir/stdout" \
+    "teardown did not report the task browser it reaped"
+  pass "fm-teardown reaps task-attributed Puppeteer browsers before cleanup"
+}
+
 test_local_only_fork_remote_allows
 test_endpoint_kill_is_verified_gone
 test_surviving_endpoint_warns_loudly
@@ -1492,6 +1520,7 @@ test_local_only_force_overrides_unpushed
 test_herdr_teardown_clears_escalation_marker
 test_herdr_projection_teardown_retires_journal_only_after_confirmed_close
 test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
+test_teardown_reaps_task_browser_before_cleanup
 test_squash_merged_branch_deleted_allows
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows
