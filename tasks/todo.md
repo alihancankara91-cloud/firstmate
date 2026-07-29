@@ -1,3 +1,9 @@
+# CI behavior failure fixes
+
+- [x] Diagnose the portable secondmate teardown failure and the Herdr per-home teardown failure.
+- [x] Update the stale portable assertion and restore faithful per-home teardown context.
+- [x] Run focused portable and Herdr verification.
+
 # Review finding fixes
 
 - [x] Validate legacy non-tmux cleanup, Orca abort recovery, and delivery-gate documentation findings.

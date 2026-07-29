@@ -1710,7 +1710,7 @@ SH
     grep -F -- "- $tid " "$home/data/secondmates.md" >/dev/null || fail "teardown ($row) removed the registry route after refusal"
     grep -F 'kill-window' "$log" >/dev/null && fail "teardown ($row) killed a window before validation"
   done <<'ROWS'
-unmarked|not a seeded secondmate home
+unmarked|no exact endpoint-owning home
 ancestor|ancestor of the active firstmate home
 active-descendant|inside the active firstmate home
 repo-descendant|inside the firstmate repo
@@ -1844,8 +1844,8 @@ EOF
   [ -e "$home/state/domain.meta" ] || fail "force teardown cleared parent meta before validation"
   [ -e "$subhome/state/child.meta" ] || fail "force teardown cleared child meta before validation"
   grep -F 'kill-window' "$log" >/dev/null && fail "force teardown killed windows before subhome validation"
-  grep -F 'not a seeded secondmate home' "$err" >/dev/null || fail "force teardown did not explain missing seed marker"
-  pass "force teardown validates subhome before child cleanup"
+  grep -F 'no exact endpoint-owning home' "$err" >/dev/null || fail "force teardown did not reject unproven secondmate endpoint ownership"
+  pass "force teardown authenticates subhome endpoint ownership before child cleanup"
 }
 
 test_secondmate_force_teardown_refuses_child_active_home_descendant() {

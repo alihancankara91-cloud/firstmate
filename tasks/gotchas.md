@@ -1,5 +1,11 @@
 # Gotchas
 
+- A no-mistakes PR worktree may still lack worktree-local gate initialization, so inspect `doctor` before assuming the existing PR run is attachable.
+- Re-read the current task ledger before patching it because another crewmate may have already changed the expected context.
+- A focused portable failure can expose a stale synthetic assertion when a stronger fail-closed validation now rejects the fixture earlier.
+- A fail-fast test can hide later stale assertions for the same contract until its first outdated expectation is corrected.
+- A per-home Herdr E2E teardown must set `FM_HOME` as well as state, data, and config overrides or endpoint ownership resolves against the wrong home.
+- Quote or disable unmatched glob patterns in zsh diagnostic commands because an empty match aborts the command before inspection.
 - Run focused ShellCheck through the repository's configured source graph or with its established exclusions; a bare multi-file invocation reports non-actionable SC1091 and test-harness SC2153 diagnostics.
 - Before a multi-file patch, re-read every target hunk's exact current context; one shifted function signature rejects the entire patch.
 - In a failure-condition OR chain, an optional write guard must return false when the optional value is absent.
