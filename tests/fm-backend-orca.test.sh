@@ -435,7 +435,7 @@ test_worktree_create_removes_worktree_when_path_missing() {
 }
 
 test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
-  local proj data state config id out status
+  local proj data state config id out status neutral
   id="orcapathlessz6"
   proj="$TMP_ROOT/pathless-cleanup-project"
   data="$TMP_ROOT/pathless-cleanup-data"
@@ -463,10 +463,27 @@ test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
     "pathless cleanup should attempt helper-backed worktree removal"
   assert_present "$state/$id.meta" "failed pathless cleanup should preserve metadata"
   assert_grep "window=fm-$id" "$state/$id.meta" "preserved pathless metadata missing stable window alias"
+  assert_grep "endpoint_task_id=$id" "$state/$id.meta" "preserved pathless metadata missing task binding"
   assert_grep "backend=orca" "$state/$id.meta" "preserved pathless metadata missing backend=orca"
+  assert_grep "orca_recovery=worktree-only" "$state/$id.meta" "preserved pathless metadata missing recovery state"
   assert_grep "orca_worktree_id=wt-pathless-cleanup" "$state/$id.meta" "preserved pathless metadata missing Orca worktree id"
   assert_no_grep "terminal=" "$state/$id.meta" "preserved pathless metadata should not invent a terminal handle"
-  pass "fm-spawn.sh --backend orca: preserves metadata when pathless cleanup fails"
+
+  orca_case pathless-cleanup-retry
+  neutral=$(neutral_fm_root "$CASE_DIR/neutral")
+  set +e
+  out=$( PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
+    FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    "$ROOT/bin/fm-teardown.sh" "$id" --force 2>&1 )
+  status=$?
+  set -e
+  expect_code 0 "$status" "retained pathless Orca recovery should tear down on retry"$'\n'"$out"
+  assert_contains "$(cat "$LOG")" $'orca\x1f''worktree'$'\x1f''rm'$'\x1f''--worktree'$'\x1f''id:wt-pathless-cleanup'$'\x1f''--force'$'\x1f''--json' \
+    "recovery teardown did not retry the exact retained Orca worktree id"
+  assert_not_contains "$(cat "$LOG")" $'orca\x1f''terminal'$'\x1f''close' \
+    "recovery teardown attempted to close an unrecorded terminal"
+  assert_absent "$state/$id.meta" "successful recovery teardown retained metadata"
+  pass "fm-spawn.sh --backend orca: retained pathless cleanup metadata is safely teardown-compatible"
 }
 
 test_spawn_writes_orca_metadata_and_launches_harness() {
@@ -658,7 +675,9 @@ test_spawn_preserves_orca_metadata_when_abort_cleanup_fails() {
     "Orca spawn should attempt helper cleanup before preserving metadata"
   assert_present "$state/$id.meta" "failed Orca abort cleanup should preserve metadata"
   assert_grep "window=fm-$id" "$state/$id.meta" "preserved metadata missing stable window alias"
+  assert_grep "endpoint_task_id=$id" "$state/$id.meta" "preserved metadata missing task binding"
   assert_grep "backend=orca" "$state/$id.meta" "preserved metadata missing backend=orca"
+  assert_grep "orca_recovery=worktree-only" "$state/$id.meta" "preserved metadata missing recovery state"
   assert_grep "orca_worktree_id=wt-cleanup-fail" "$state/$id.meta" "preserved metadata missing Orca worktree id"
   assert_no_grep "terminal=" "$state/$id.meta" "preserved metadata should not invent a terminal handle"
   pass "fm-spawn.sh --backend orca: preserves metadata when abort cleanup fails"

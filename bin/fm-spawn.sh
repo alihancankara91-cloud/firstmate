@@ -317,6 +317,7 @@ spawn_abort_cleanup() {
         if [ -d "$STATE" ]; then
           {
             echo "window=$W"
+            echo "endpoint_task_id=$ID"
             echo "worktree=${WT:-}"
             echo "project=$PROJ_ABS"
             echo "harness=$HARNESS"
@@ -327,6 +328,7 @@ spawn_abort_cleanup() {
             echo "model=${MODEL:-default}"
             echo "effort=${EFFORT:-default}"
             echo "backend=orca"
+            echo "orca_recovery=worktree-only"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
           } > "$STATE/$ID.meta" 2>/dev/null || true

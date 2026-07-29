@@ -363,9 +363,10 @@ fm_backend_target_of_meta() {  # <meta-file>
 # fm_backend_validate_task_endpoint: validate a task cleanup record entirely
 # from its durable metadata before any runtime command or cleanup mutation.
 # The validation binds the exact task id, selected backend, target, project,
-# and worktree. New non-tmux records carry endpoint_task_id because their
-# opaque runtime ids do not encode the task label. Legacy tmux records remain
-# valid only when their window name itself is exactly fm-<task-id>.
+# and worktree. New records carry endpoint_task_id, while legacy records
+# without it remain valid only when every backend-specific identity field is
+# exact and internally consistent. Legacy tmux records additionally require
+# their window name itself to be exactly fm-<task-id>.
 # On success, sets FM_BACKEND_VALIDATED_BACKEND and
 # FM_BACKEND_VALIDATED_TARGET. On failure, prints one refusal and returns 1.
 fm_backend_meta_exact_value() {  # <meta-file> <key>
@@ -384,8 +385,8 @@ fm_backend_endpoint_atom_valid() {  # <value>
 }
 
 fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
-  local meta=$1 id=$2 backend_count backend window worktree project binding_count binding
-  local session pane recorded_session workspace tab terminal worktree_id surface
+  local meta=$1 id=$2 backend_count backend window worktree_count worktree project binding_count binding
+  local recovery_count recovery session pane recorded_session workspace tab terminal_count terminal worktree_id surface
   FM_BACKEND_VALIDATED_BACKEND=
   FM_BACKEND_VALIDATED_TARGET=
   [ -f "$meta" ] && [ ! -L "$meta" ] || {
@@ -400,18 +401,10 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: task $id has a missing, empty, or ambiguous window endpoint; preserving task state." >&2
     return 1
   }
-  worktree=$(fm_backend_meta_exact_value "$meta" worktree) || {
-    echo "REFUSED: task $id has a missing, empty, or ambiguous worktree identity; preserving task state." >&2
-    return 1
-  }
   project=$(fm_backend_meta_exact_value "$meta" project) || {
     echo "REFUSED: task $id has a missing, empty, or ambiguous project identity; preserving task state." >&2
     return 1
   }
-  case "$worktree$project$window" in *$'\n'*|*$'\r'*|*$'\t'*)
-    echo "REFUSED: task $id has malformed endpoint metadata; preserving task state." >&2
-    return 1
-  esac
   backend_count=$(grep -c '^backend=' "$meta" 2>/dev/null || true)
   case "$backend_count" in
     0) backend=tmux ;;
@@ -440,6 +433,41 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: endpoint metadata belongs to task $binding, not $id; preserving task state." >&2
     return 1
   fi
+  recovery_count=$(grep -c '^orca_recovery=' "$meta" 2>/dev/null || true)
+  case "$recovery_count" in
+    0) recovery= ;;
+    1)
+      recovery=$(fm_backend_meta_exact_value "$meta" orca_recovery) || {
+        echo "REFUSED: task $id has an empty Orca recovery identity; preserving task state." >&2
+        return 1
+      }
+      ;;
+    *)
+      echo "REFUSED: task $id has an ambiguous Orca recovery identity; preserving task state." >&2
+      return 1
+      ;;
+  esac
+  if [ -n "$recovery" ] && { [ "$backend" != orca ] || [ "$recovery" != worktree-only ] || [ "$binding" != "$id" ]; }; then
+    echo "REFUSED: task $id has invalid Orca recovery metadata; preserving task state." >&2
+    return 1
+  fi
+  worktree_count=$(grep -c '^worktree=' "$meta" 2>/dev/null || true)
+  if [ "$worktree_count" -ne 1 ]; then
+    echo "REFUSED: task $id has a missing or ambiguous worktree identity; preserving task state." >&2
+    return 1
+  fi
+  worktree=$(grep '^worktree=' "$meta" | cut -d= -f2-)
+  if [ -z "$worktree" ] && [ "$recovery" != worktree-only ]; then
+    if [ "$backend" != orca ] || [ -n "$binding" ] \
+      || [ "$(grep -c '^terminal=' "$meta" 2>/dev/null || true)" -ne 0 ]; then
+      echo "REFUSED: task $id has an empty worktree identity; preserving task state." >&2
+      return 1
+    fi
+  fi
+  case "$worktree$project$window" in *$'\n'*|*$'\r'*|*$'\t'*)
+    echo "REFUSED: task $id has malformed endpoint metadata; preserving task state." >&2
+    return 1
+  esac
 
   case "$backend" in
     tmux)
@@ -452,10 +480,6 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
       fi
       ;;
     herdr)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy Herdr endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
       recorded_session=$(fm_backend_meta_exact_value "$meta" herdr_session) || recorded_session=
       workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || workspace=
       tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || tab=
@@ -471,10 +495,6 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
       fi
       ;;
     zellij)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy Zellij endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
       recorded_session=$(fm_backend_meta_exact_value "$meta" zellij_session) || recorded_session=
       tab=$(fm_backend_meta_exact_value "$meta" zellij_tab_id) || tab=
       pane=$(fm_backend_meta_exact_value "$meta" zellij_pane_id) || pane=
@@ -487,22 +507,26 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
       fi
       ;;
     orca)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy Orca endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
-      terminal=$(fm_backend_meta_exact_value "$meta" terminal) || terminal=
+      terminal_count=$(grep -c '^terminal=' "$meta" 2>/dev/null || true)
+      case "$terminal_count" in
+        0) terminal= ;;
+        1) terminal=$(fm_backend_meta_exact_value "$meta" terminal) || terminal= ;;
+        *)
+          echo "REFUSED: task $id has an ambiguous Orca terminal identity; preserving task state." >&2
+          return 1
+          ;;
+      esac
       worktree_id=$(fm_backend_meta_exact_value "$meta" orca_worktree_id) || worktree_id=
-      [ -n "$terminal" ] || {
+      if [ -z "$terminal" ] && [ -n "$binding" ] && [ "$recovery" != worktree-only ]; then
         echo "REFUSED: missing terminal in $meta; cannot close Orca endpoint; preserving task state." >&2
         return 1
-      }
+      fi
       [ -n "$worktree_id" ] || {
         echo "REFUSED: missing orca_worktree_id in $meta; cannot remove Orca worktree; preserving task state." >&2
         return 1
       }
       if [ "$window" != "fm-$id" ] \
-        || ! fm_backend_endpoint_atom_valid "$terminal" \
+        || { [ -n "$terminal" ] && ! fm_backend_endpoint_atom_valid "$terminal"; } \
         || ! fm_backend_endpoint_atom_valid "$worktree_id"; then
         echo "REFUSED: Orca endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
         return 1
@@ -510,10 +534,6 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
       window=$terminal
       ;;
     cmux)
-      [ "$binding" = "$id" ] || {
-        echo "REFUSED: legacy cmux endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
-        return 1
-      }
       workspace=$(fm_backend_meta_exact_value "$meta" cmux_workspace_id) || workspace=
       surface=$(fm_backend_meta_exact_value "$meta" cmux_surface_id) || surface=
       if [ -z "$workspace" ] || [ -z "$surface" ] || [ "$window" != "$workspace:$surface" ] \

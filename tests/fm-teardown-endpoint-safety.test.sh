@@ -90,6 +90,18 @@ test_invalid_endpoint_records_refuse_before_mutation() {
     "worktree=$dir/worktree" "project=$dir/project" "kind=scout"
   assert_refused_without_mutation "$dir" "$id" "duplicate task binding"
 
+  dir=$(make_case unbound-recovery)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "worktree=" "project=$dir/project" "backend=orca" \
+    "orca_recovery=worktree-only" "orca_worktree_id=worktree-recovery"
+  assert_refused_without_mutation "$dir" "$id" "unbound Orca recovery"
+
+  dir=$(make_case unmarked-current-recovery)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "endpoint_task_id=$id" "worktree=" "project=$dir/project" \
+    "backend=orca" "orca_worktree_id=worktree-recovery"
+  assert_refused_without_mutation "$dir" "$id" "unmarked current Orca recovery"
+
   pass "fm-teardown: missing, empty, malformed, ambiguous, and task-mismatched endpoints refuse before every mutation or runtime call"
 }
 
@@ -136,6 +148,44 @@ test_supported_backend_endpoint_records_validate() {
     "backend=cmux" "cmux_workspace_id=workspace-1" "cmux_surface_id=surface-2"
   fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid cmux endpoint refused"
 
+  id=legacy-herdr
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:w1:p12" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t12" "herdr_pane_id=w1:p12"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy Herdr endpoint refused"
+
+  id=legacy-zellij
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:17" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=zellij" "zellij_session=lab" "zellij_tab_id=13" "zellij_pane_id=17"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy Zellij endpoint refused"
+
+  id=legacy-orca
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "terminal=term-legacy" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=orca" "orca_worktree_id=worktree-legacy"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy Orca endpoint refused"
+
+  id=legacy-orca-recovery
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "worktree=" "project=$dir/project" \
+    "backend=orca" "orca_worktree_id=worktree-legacy-recovery"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy Orca recovery refused"
+  [ -z "$FM_BACKEND_VALIDATED_TARGET" ] || fail "legacy Orca recovery invented a terminal cleanup target"
+
+  id=legacy-cmux
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=workspace-11:surface-12" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=cmux" "cmux_workspace_id=workspace-11" "cmux_surface_id=surface-12"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy cmux endpoint refused"
+
+  id=orca-recovery
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=fm-$id" "endpoint_task_id=$id" "worktree=" "project=$dir/project" \
+    "backend=orca" "orca_recovery=worktree-only" "orca_worktree_id=worktree-recovery"
+  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid Orca worktree-only recovery refused"
+  [ -z "$FM_BACKEND_VALIDATED_TARGET" ] || fail "Orca worktree-only recovery invented a terminal cleanup target"
+
   for backend in tmux herdr zellij orca cmux; do
     set +e
     fm_backend_kill "$backend" "" >/dev/null 2>&1
@@ -143,7 +193,7 @@ test_supported_backend_endpoint_records_validate() {
     set -e
     [ "$target" -ne 0 ] || fail "$backend generic kill accepted an empty target"
   done
-  pass "cleanup identity: valid tmux, Herdr, Zellij, Orca, and cmux records validate while every empty backend target refuses"
+  pass "cleanup identity: current, legacy, and Orca recovery records validate while every empty backend kill target refuses"
 }
 
 test_tmux_empty_target_refuses_without_invocation() {
