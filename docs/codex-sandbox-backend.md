@@ -39,7 +39,7 @@ Seatbelt denies by default and then grants these task capabilities:
 - System runtimes, developer tools, the Codex installation, the task worktree, its Git metadata, the exact task data directory, exact lifecycle files, and the cage's private temporary directory are readable.
 - Only the discovered native Codex executable can read and write `CODEX_HOME`, so Codex can authenticate while model-launched shells cannot read its credential store.
 - For a resolved rules file outside `CODEX_HOME`, that native process receives only exact-file read access, with no containing-directory or write grant.
-- Interactive native Codex receives terminal-control ioctl access only to the exact controlling macOS PTY discovered at launch, while headless launches bind the inert `/dev/null` path and child processes receive no terminal ioctl allowance.
+- Native Codex receives terminal-control ioctl access only to the exact controlling macOS PTY discovered at launch, while launches without a controlling terminal bind the inert `/dev/null` path and child processes receive no terminal ioctl allowance.
 - Writes are limited to the task worktree, its Git metadata, `data/<id>`, the exact `state/<id>.status`, the exact turn-end file, and the cage's private temporary directory.
 - Outbound internet access remains available for Codex and public Git operations.
 - Every loopback TCP destination is denied, including already-running Chrome remote-debugging ports.
@@ -88,7 +88,7 @@ A temporary diagnostic profile changed one permission at a time under the native
 Allowing `/dev` reads alone retained the denial, allowing `/dev` writes alone retained the denial, and allowing `/dev` ioctls allowed the TUI to start.
 The production fix does not retain that broad diagnostic scope.
 The wrapper now discovers and validates only its controlling `/dev/ttys<alphanumeric>` character device, passes that exact path into Seatbelt, and the native-process filter grants `file-ioctl` only for that literal path.
-A headless launch passes `/dev/null`, and the regression test proves a model-launched child process still receives an operating-system denial when it attempts the same terminal inspection.
+A launch without a controlling terminal passes `/dev/null`, and the regression test proves a model-launched child process still receives an operating-system denial when it attempts the same terminal inspection.
 
 The deterministic regression test uses macOS `expect` to allocate a real PTY and runs the real wrapper twice.
 A fake `codex` symlink to `/bin/stty` proves the native executable can inspect only its controlling terminal, then a fake `codex` symlink to `/bin/zsh` proves its `/bin/stty` child cannot inherit the process-path-filtered ioctl allowance.
