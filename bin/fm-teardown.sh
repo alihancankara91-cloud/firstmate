@@ -3,8 +3,9 @@
 # worktree, or retire a secondmate home; kill the recorded runtime endpoint
 # and VERIFY it is gone (a surviving endpoint is retried once, then reported
 # loudly, so finished agents cannot silently accumulate as dead panes);
-# clear volatile state, refresh/prune the project's clone for PR-based ship
-# tasks, then print a backlog-refresh reminder for ship and scout teardowns
+# reap task-attributed Puppeteer Chrome processes, clear volatile state,
+# refresh/prune the project's clone for PR-based ship tasks, then print a
+# backlog-refresh reminder for ship and scout teardowns
 # (a secondmate teardown prints none, since secondmates are not backlog items).
 # REFUSES if the worktree holds work that has not LANDED, because cleanup
 # hard-resets/removes the worktree and kills its processes. Work has landed when it is
@@ -168,9 +169,12 @@ T_ORCA=
 "$FM_ROOT/bin/fm-guard.sh" || true
 HOME_PATH=$(grep '^home=' "$META" | cut -d= -f2- || true)
 PR_URL=$(grep '^pr=' "$META" | tail -1 | cut -d= -f2- || true)
-# tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root
-# (/tmp/fm-<id>/); absent for tasks spawned before that change, so tolerate empty.
+# tasktmp is recorded by fm-spawn for tasks that set up a per-task temp root;
+# absent for tasks spawned before that change, so tolerate empty.
 TASK_TMP=$(grep '^tasktmp=' "$META" | cut -d= -f2- || true)
+# New tasks also record the home-scoped TMPDIR used by Puppeteer. Older metadata
+# lacks this field; the reaper falls back to tasktmp, worktree, and process cwd.
+BROWSER_TMP=$(grep '^browsertmp=' "$META" | cut -d= -f2- || true)
 ORCA_WORKTREE_ID=$(fm_meta_get "$META" orca_worktree_id)
 ORCA_PATH_MATCH_VERIFIED=0
 
@@ -246,6 +250,17 @@ verified_endpoint_exists() {  # <backend> <target> <tab-id> <label>
 # still completes, because the safety checks have already passed by the time
 # this runs and stranding task state over a display-surface failure would be
 # worse than one visible leftover pane.
+reap_task_browsers() {  # <home> <state> <task-id> [home-code-root]
+  local home=$1 state_dir=$2 task_id=$3 home_root=${4:-$FM_ROOT} reaper
+  reaper="$FM_ROOT/bin/fm-reap-browsers.sh"
+  if [ ! -x "$reaper" ]; then
+    echo "warning: browser reaper is unavailable; task-attributed browser cleanup was skipped" >&2
+    return 0
+  fi
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$home_root" FM_STATE_OVERRIDE="$state_dir" \
+    "$reaper" --task "$task_id"
+}
+
 kill_endpoint_verified() {  # <backend> <target> <tab-id> <label> [herdr-workspace-id] [owning-home] [owning-root]
   local backend=$1 target=$2 tab=$3 label=$4 workspace=${5:-}
   local owning_home=${6:-$FM_HOME} owning_root=${7:-$FM_ROOT}
@@ -1072,6 +1087,9 @@ cleanup_firstmate_home_children() {
         validate_child_worktree_for_removal "$child_wt" "$child_proj" >/dev/null || return 1
       fi
     fi
+    # Reap browser automation before killing the child endpoint or returning its
+    # worktree, while ancestry and cwd attribution are still available.
+    reap_task_browsers "$home" "$sub_state" "$child_id" "$home" || return 1
     if [ -n "$child_t" ]; then
       fm_backend_task_endpoint_ownership "$child_meta" "$child_id" "$home" "$home" || return 1
       child_endpoint_home=$FM_BACKEND_ENDPOINT_OWNING_HOME
@@ -1117,6 +1135,7 @@ cleanup_firstmate_home_children() {
         safe_rm_rf_child_worktree "$child_wt" "$child_proj"
       fi
     fi
+    reap_task_browsers "$home" "$sub_state" "$child_id" "$home" || return 1
     remove_grok_turnend_auth "$sub_state" "$child_id"
     remove_kimi_turnend_auth "$sub_state" "$child_id"
     remove_pr_poll_artifacts "$sub_state" "$child_id" || return 1
@@ -1239,6 +1258,14 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND
   fi
 fi
 
+# Reap browser automation before killing the endpoint or returning the worktree,
+# while ancestry and cwd attribution are still available. If an attributable
+# browser survives TERM and KILL, preserve the task records and stop cleanup.
+reap_task_browsers "$FM_HOME" "$STATE" "$ID" "$FM_ROOT" || {
+  echo "error: task-attributed browser processes survived; teardown aborted" >&2
+  exit 1
+}
+
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   if [ "$ORCA_PATH_MATCH_VERIFIED" != 1 ]; then
@@ -1353,8 +1380,17 @@ fi
 remove_grok_turnend_auth "$STATE" "$ID"
 remove_kimi_turnend_auth "$STATE" "$ID"
 fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
-# Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
-# Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
+# Close the launch-to-cleanup race: after the endpoint and worktree are gone,
+# scan once more before deleting attribution records. A browser launched during
+# the first scan must not survive merely because it missed that process snapshot.
+reap_task_browsers "$FM_HOME" "$STATE" "$ID" "$FM_ROOT" || {
+  echo "error: a late task-attributed browser process survived; preserving task records" >&2
+  exit 1
+}
+# Remove the per-task temp roots recorded by spawn. BROWSER_TMP normally lives
+# below TASK_TMP, but remove both explicitly for compatibility with any future
+# layout change. Empty fields from older tasks are no-ops.
+[ -n "$BROWSER_TMP" ] && rm -rf "$BROWSER_TMP"
 [ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \

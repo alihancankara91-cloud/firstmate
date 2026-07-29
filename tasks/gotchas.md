@@ -7,6 +7,7 @@
 - Herdr jq arguments must avoid jq 1.6 reserved identifiers, including `label`.
 - Re-read the exact flagged jq expression before patching because its result-shape predicate may differ from nearby queries.
 - The docs audience checker classifies every changed Markdown file, including workflow task ledgers, so focused source verification must account for those separately.
+- Changed-test selection treats workflow task ledgers as source paths, so conflict-only ledger changes require explicit focused test selection.
 - Locate the audience inventory from the checker defaults before assuming its path.
 - ShellCheck treats a later test-local function override as the definition for earlier calls, so real-helper coverage and stubbed orchestration coverage belong in separate test functions.
 - Patch workflow ledgers separately when their prior-round content is not part of the source context just inspected.
@@ -17,12 +18,19 @@
 - Focused lint includes informational ShellCheck findings, so test assertions containing literal shell expansions must escape them and dynamic test overrides need local lint annotations.
 - Keep workflow-ledger hunks out of multi-file source patches because stale task text otherwise rejects every unrelated hunk atomically.
 - Producer-side output globals need an explicit local read so focused ShellCheck recognizes their cross-file consumers.
-- Collaboration waits require at least 10000 milliseconds even for a quick mailbox poll.
+- Pass at least 10000 milliseconds to collaboration waits, even for a quick mailbox poll.
 - Preserve shell `case` pattern lines without trailing spaces when extending long regression fixture lists.
 - Test stubs that set cross-function output globals need an explicit local read for focused ShellCheck.
 - Always invoke focused `tests/*.test.sh` files through Bash or `bin/fm-test-run.sh`, even when nearby tests run directly; executable bits are not guaranteed for every test file.
 - `gh-axi pr list --fields` exposes only the fields shown by its current help; omit unsupported GitHub CLI field names.
-- In isolated local-test worktrees, treat `no-mistakes axi` reporting an uninitialized repository as a setup probe result and do not initialize the gate outside the worktree-local test scope.
+- In isolated or conflict-resolution worktrees, treat `no-mistakes axi` reporting an uninitialized repository as a setup probe result and do not initialize the gate implicitly.
 - Decision-hold completion applies only to investigations with task metadata owned by the active Firstmate home.
 - Put `rg` patterns containing Markdown backticks in single-quoted shell arguments so command construction cannot leave an unmatched double quote.
 - Verify a target document's exact generated Markdown anchor before adding a cross-reference.
+- `apply_patch` cannot create a file when its parent directory is absent, so create the directory first.
+- A file cannot be added and updated in the same `apply_patch` call.
+- Under macOS Bash 3 with `set -u`, expanding a declared but empty array raises an unbound-variable error, so seed indexed caches with an empty element.
+- Distinct-home attribution tests must include the secondmate home marker because the shared home-tag helper uses that marker to distinguish homes sharing one code root.
+- Home-scoped browser path recognition must match canonical home-tag prefixes, not every directory whose unrelated name begins with `browser-`.
+- Running a test definition through `/dev/fd` breaks fixtures that resolve shared helpers relative to the script path, so use the repository test runner.
+- Repository discovery must stay rooted in the current worktree because sibling worktrees are outside the permitted review boundary.

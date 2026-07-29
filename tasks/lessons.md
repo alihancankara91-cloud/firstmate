@@ -5,3 +5,5 @@
 - Runtime ownership belongs to the task container and its effective home, so replaceable pane or surface handles cannot prove absence and secondmate cleanup cannot inherit the primary home's identity.
 - Effective endpoint homes are backend-specific: Herdr moves a secondmate into its child workspace, while Zellij keeps the secondmate endpoint in the spawning parent's shared session.
 - Shared GUI runtimes need one global inventory authority for migration, live checks, and removal so window focus cannot change endpoint identity.
+- Browser attribution namespaces must scope the entire task temp root by Firstmate home, not only the Puppeteer child directory.
+- Process ownership evidence should be snapshotted once per candidate before comparing it with live task records.

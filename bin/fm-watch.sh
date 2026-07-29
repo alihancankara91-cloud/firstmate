@@ -32,6 +32,9 @@
 #                          closer look instead of another routine supervision
 #                          resume. Unless afk is active.
 #   check: <script>: <out> authenticated check output, always actionable
+# Periodically, the same slow-check cadence also runs the conservative browser
+# orphan reaper. Its reports go to the bounded triage log and never create a
+# captain-facing wake by themselves.
 #   check: rejected unauthenticated state checks: <paths>
 #                          unsafe state checks were refused without execution
 #   check: rejected unauthenticated PR poll retirement receipts: <paths>
@@ -722,6 +725,17 @@ while :; do
   # never run until the fleet went quiet. Checks are due only every
   # CHECK_INTERVAL, so most cycles skip this block and fall straight through.
   if [ "$(age_of "$STATE/.last-check")" -ge "$CHECK_INTERVAL" ]; then
+    if [ -x "$SCRIPT_DIR/fm-reap-browsers.sh" ]; then
+      reap_out=$(FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$STATE" \
+        "$SCRIPT_DIR/fm-reap-browsers.sh" 2>&1)
+      reap_rc=$?
+      while IFS= read -r reap_line; do
+        [ -n "$reap_line" ] && triage_log "browser reaper: $reap_line"
+      done <<EOF
+$reap_out
+EOF
+      [ "$reap_rc" -eq 0 ] || triage_log "browser reaper: scan or termination failed"
+    fi
     rejected_checks=
     for c in "$STATE"/*.check.sh; do
       [ -e "$c" ] || continue
