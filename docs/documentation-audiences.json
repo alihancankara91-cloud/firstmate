@@ -331,6 +331,18 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
+    },
+    {
+      "path": "tasks/gotchas.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "tasks/lessons.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": "tasks/todo.md",
+      "audience": "agent-runtime"
     }
   ]
 }

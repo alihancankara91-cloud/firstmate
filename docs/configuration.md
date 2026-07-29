@@ -78,9 +78,12 @@ Otherwise an exact task id matching `state/<id>.meta` wins before the legacy `fm
 A metadata-routed selector returns the recorded backend target (`terminal=` for Orca, otherwise `window=`), and matching explicit targets can still recover the recorded backend when metadata contains the same endpoint.
 Only metadata-routed task selectors carry secondmate-marker and Codex-harness context; explicit endpoint escape hatches do not.
 These five sentences are the single owner of the task-selector vocabulary; backend guides and other documents point here instead of restating the resolution order.
-`fm-teardown.sh <id>` takes a task id directly and validates the complete metadata-only endpoint identity before any runtime dispatch or cleanup mutation.
+`fm-teardown.sh <id>` takes a task id directly and validates the complete current endpoint identity before any runtime dispatch or cleanup mutation.
 Missing, empty, duplicate, malformed, backend-inconsistent, or task-mismatched endpoint records are preserved and refused.
-Legacy tmux metadata remains cleanup-compatible when its exact window name is `fm-<id>`; opaque non-tmux endpoints require their recorded `endpoint_task_id=` binding.
+Legacy tmux metadata remains cleanup-compatible when its exact window name is `fm-<id>`.
+For a legacy opaque record without `endpoint_task_id=`, teardown takes the task's spawn lock, requires the recorded worktree to be a project-registered worktree on exact branch `fm/<id>` or an exact marked secondmate home, and requires Herdr, Zellij, or cmux to corroborate the recorded endpoint against its unique live `fm-<id>` label.
+Orca additionally requires its recorded worktree id to resolve to that exact worktree path and migrates with terminal cleanup disabled because the verified Orca response does not bind a terminal handle to the worktree.
+After corroboration, teardown atomically adds the binding, revalidates the current schema, and rechecks the Herdr, Zellij, or cmux label at endpoint removal; missing, ambiguous, renamed-branch, crossed, pathless unbound Orca, or unavailable provenance fails closed without cleanup.
 By default, Herdr workspaces are derived from `FM_HOME`: the primary home uses `firstmate`, and a secondmate home marked by `.fm-secondmate-home` uses `2ndmate-<secondmate-id>`.
 The default-container spawn, list-live, and recovery paths read that label from the active home, so a secondmate's own crewmates stay inside that secondmate home's herdr space.
 The optional local `config/herdr-presentation-spaces` presence flag instead enables Herdr's default-off disposable single-task visual projection; [Optional presentation spaces](herdr-backend.md#optional-presentation-spaces) owns its behavior, safety limits, recovery contract, and narrow locked session-start cleanup of exact restored idle-shell children.

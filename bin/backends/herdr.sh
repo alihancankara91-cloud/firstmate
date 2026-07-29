@@ -1657,6 +1657,21 @@ fm_backend_herdr_target_ready() {  # <target>
   fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" || return 1
 }
 
+fm_backend_herdr_task_binding_matches() {  # <session> <workspace> <tab> <pane> <expected-label>
+  local session=$1 workspace=$2 tab=$3 pane=$4 expected_label=$5 tabs panes
+  tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$workspace" 2>/dev/null) || return 1
+  printf '%s' "$tabs" | jq -e --arg tab_ref "$tab" --arg expected_name "$expected_label" '
+    (.result.tabs | type) == "array"
+    and ([.result.tabs[]? | select(.tab_id == $tab_ref and .label == $expected_name)] | length) == 1
+    and ([.result.tabs[]? | select(.label == $expected_name)] | length) == 1
+  ' >/dev/null 2>&1 || return 1
+  panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$workspace" 2>/dev/null) || return 1
+  printf '%s' "$panes" | jq -e --arg tab "$tab" --arg pane "$pane" '
+    (.result.panes | type) == "array"
+    and ([.result.panes[]? | select(.pane_id == $pane and .tab_id == $tab)] | length) == 1
+  ' >/dev/null 2>&1
+}
+
 # fm_backend_herdr_current_path: the live FOREGROUND process's cwd, or empty on
 # any error. Mirrors tmux's pane_current_path poll used for worktree-path
 # discovery after `treehouse get`.
@@ -2099,8 +2114,16 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 # fm_backend_herdr_kill: remove the task's pane, best-effort (mirrors
 # tmux-kill-window's `|| true` contract). Verified: closing a tab's only pane
 # closes the tab too, so a separate tab close is unnecessary.
-fm_backend_herdr_kill() {  # <target>
-  fm_backend_herdr_target_ready "$1" || return 0
+fm_backend_herdr_kill() {  # <target> [tab-id] [expected-label] [workspace-id]
+  local target=$1 tab=${2:-} expected_label=${3:-} workspace=${4:-}
+  fm_backend_herdr_parse_target "$target" || return 0
+  if [ -n "$expected_label" ]; then
+    [ -n "$tab" ] && [ -n "$workspace" ] || return 0
+    fm_backend_herdr_task_binding_matches \
+      "$FM_BACKEND_HERDR_SESSION" "$workspace" "$tab" "$FM_BACKEND_HERDR_PANE" "$expected_label" || return 0
+  else
+    fm_backend_herdr_server_ensure "$FM_BACKEND_HERDR_SESSION" || return 0
+  fi
   fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" pane close "$FM_BACKEND_HERDR_PANE" >/dev/null 2>&1 || true
 }
 

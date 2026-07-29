@@ -134,10 +134,23 @@ FM_LOCK_LOG_PREFIX=teardown
 
 META="$STATE/$ID.meta"
 [ -f "$META" ] || { echo "error: no meta for task $ID at $META" >&2; exit 1; }
-# This is the first cleanup authorization check. It is metadata-only and must
-# complete before fm-guard, a backend command, file removal, branch deletion,
-# worktree return, registry change, or process termination can run.
-fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
+validate_task_endpoint_for_teardown() {  # <meta> <id>
+  local meta=$1 id=$2 backend lock rc=0
+  backend=$(fm_backend_of_meta "$meta")
+  if [ "$backend" != tmux ] && ! grep -q '^endpoint_task_id=' "$meta" 2>/dev/null; then
+    lock="$(dirname "$meta")/.spawn-$id.lock"
+    fm_lock_try_acquire "$lock" || {
+      echo "REFUSED: task $id endpoint migration lock is busy; preserving task state." >&2
+      return 1
+    }
+    fm_backend_migrate_legacy_task_endpoint "$meta" "$id" || rc=$?
+    fm_lock_release "$lock" || true
+    [ "$rc" -eq 0 ] || return "$rc"
+  fi
+  fm_backend_validate_task_endpoint "$meta" "$id"
+}
+
+validate_task_endpoint_for_teardown "$META" "$ID" || exit 1
 BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
@@ -201,7 +214,9 @@ require_orca_terminal() {
 
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
   ORCA_WORKTREE_ID=$(require_orca_worktree_id "$META") || exit 1
-  T_ORCA=$(meta_value "$META" terminal)
+  if [ "$(meta_value "$META" legacy_endpoint_cleanup)" != skip-terminal ]; then
+    T_ORCA=$(meta_value "$META" terminal)
+  fi
   [ -z "$T_ORCA" ] || T=$T_ORCA
 fi
 
@@ -212,13 +227,13 @@ fi
 # still completes, because the safety checks have already passed by the time
 # this runs and stranding task state over a display-surface failure would be
 # worse than one visible leftover pane.
-kill_endpoint_verified() {  # <backend> <target> <zellij-tab-id> <label>
-  local backend=$1 target=$2 tab=$3 label=$4
+kill_endpoint_verified() {  # <backend> <target> <tab-id> <label> [herdr-workspace-id]
+  local backend=$1 target=$2 tab=$3 label=$4 workspace=${5:-}
   [ -n "$target" ] || return 0
-  fm_backend_kill "$backend" "$target" "$tab" "$label" 2>/dev/null || true
+  fm_backend_kill "$backend" "$target" "$tab" "$label" "$workspace" 2>/dev/null || true
   fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null || return 0
   sleep 1
-  fm_backend_kill "$backend" "$target" "$tab" "$label" 2>/dev/null || true
+  fm_backend_kill "$backend" "$target" "$tab" "$label" "$workspace" 2>/dev/null || true
   if fm_backend_target_exists "$backend" "$target" "$label" 2>/dev/null; then
     echo "warning: endpoint $target for $label survived teardown removal; close it manually so dead panes do not accumulate" >&2
   fi
@@ -981,7 +996,7 @@ validate_firstmate_home_children_removal() {
   for child_meta in "$sub_state"/*.meta; do
     [ -e "$child_meta" ] || continue
     child_id=$(basename "$child_meta" .meta)
-    fm_backend_validate_task_endpoint "$child_meta" "$child_id" || return 1
+    validate_task_endpoint_for_teardown "$child_meta" "$child_id" || return 1
     validate_pr_poll_cleanup "$sub_state" "$child_id" || return 1
     child_wt=$(meta_value "$child_meta" worktree)
     child_kind=$(meta_value "$child_meta" kind)
@@ -1007,7 +1022,7 @@ validate_firstmate_home_children_removal() {
 }
 
 cleanup_firstmate_home_children() {
-  local home=$1 sub_state child_meta child_id child_t child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc
+  local home=$1 sub_state child_meta child_id child_t child_tab child_wt child_proj child_kind child_home child_backend child_orca_worktree_id child_return_rc
   sub_state="$home/state"
   [ -d "$sub_state" ] || return 0
   for child_meta in "$sub_state"/*.meta; do
@@ -1019,7 +1034,10 @@ cleanup_firstmate_home_children() {
     [ -n "$child_kind" ] || child_kind=ship
     child_backend=$(fm_backend_of_meta "$child_meta")
     if [ "$child_backend" = orca ]; then
-      child_t=$(meta_value "$child_meta" terminal)
+      child_t=
+      if [ "$(meta_value "$child_meta" legacy_endpoint_cleanup)" != skip-terminal ]; then
+        child_t=$(meta_value "$child_meta" terminal)
+      fi
     else
       child_t=$(fm_backend_target_of_meta "$child_meta")
     fi
@@ -1033,9 +1051,11 @@ cleanup_firstmate_home_children() {
       if [ "$child_backend" = zellij ]; then
         # Zellij titles are scoped by the owning home tag, so forced secondmate
         # cleanup must verify child tabs as that child home, not the parent.
-        ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" ) 2>/dev/null || true
+        ( unset FM_ROOT_OVERRIDE; FM_HOME=$home FM_ROOT=$home fm_backend_kill "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id" "$(meta_value "$child_meta" herdr_workspace_id)" ) 2>/dev/null || true
       else
-        kill_endpoint_verified "$child_backend" "$child_t" "$(meta_value "$child_meta" zellij_tab_id)" "fm-$child_id"
+        child_tab=$(meta_value "$child_meta" zellij_tab_id)
+        [ "$child_backend" != herdr ] || child_tab=$(meta_value "$child_meta" herdr_tab_id)
+        kill_endpoint_verified "$child_backend" "$child_t" "$child_tab" "fm-$child_id" "$(meta_value "$child_meta" herdr_workspace_id)"
       fi
     fi
     if [ "$child_kind" = secondmate ]; then
@@ -1283,7 +1303,9 @@ if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
     echo "warning: herdr presentation focus lock unavailable; refusing a concurrent focus-unsafe pane close" >&2
   fi
 elif [ "$BACKEND" != orca ]; then
-  kill_endpoint_verified "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID"
+  endpoint_tab=$(meta_value "$META" zellij_tab_id)
+  [ "$BACKEND" != herdr ] || endpoint_tab=$(meta_value "$META" herdr_tab_id)
+  kill_endpoint_verified "$BACKEND" "$T" "$endpoint_tab" "fm-$ID" "$(meta_value "$META" herdr_workspace_id)"
 fi
 if [ "$HERDR_PRESENTATION_RETIRE_CANDIDATE" = 1 ]; then
   if [ "$(fm_backend_herdr_pane_agent_state "$HERDR_PRESENTATION_SESSION" "$HERDR_PRESENTATION_PANE")" = dead ]; then

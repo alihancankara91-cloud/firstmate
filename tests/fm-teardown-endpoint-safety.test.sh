@@ -102,7 +102,31 @@ test_invalid_endpoint_records_refuse_before_mutation() {
     "backend=orca" "orca_worktree_id=worktree-recovery"
   assert_refused_without_mutation "$dir" "$id" "unmarked current Orca recovery"
 
+  dir=$(make_case stripped-binding)
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:7" "worktree=$dir/worktree" "project=$dir/project" "kind=scout" \
+    "backend=zellij" "zellij_session=lab" "zellij_tab_id=3" "zellij_pane_id=7"
+  assert_refused_without_mutation "$dir" "$id" "binding-stripped opaque endpoint"
+
   pass "fm-teardown: missing, empty, malformed, ambiguous, and task-mismatched endpoints refuse before every mutation or runtime call"
+}
+
+test_legacy_worktree_provenance() {
+  local dir id=legacy-proven proven_project proven_worktree
+  dir=$(make_case legacy-provenance)
+  # shellcheck source=/dev/null
+  . "$ROOT/bin/fm-backend.sh"
+  proven_project="$dir/proven-project"
+  proven_worktree="$dir/proven-worktree"
+  fm_git_worktree "$proven_project" "$proven_worktree" "fm/$id"
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:27" "worktree=$proven_worktree" "project=$proven_project" \
+    "backend=zellij" "zellij_session=lab" "zellij_tab_id=23" "zellij_pane_id=27"
+  fm_backend_legacy_worktree_matches "$dir/home/state/$id.meta" "$id" zellij \
+    || fail "exact project-registered fm/<id> worktree provenance was rejected"
+  ! fm_backend_legacy_worktree_matches "$dir/home/state/$id.meta" other-task zellij \
+    || fail "another task id accepted the recorded legacy worktree branch"
+  pass "legacy cleanup identity: exact project-registered fm/<id> worktree provenance is required"
 }
 
 test_supported_backend_endpoint_records_validate() {
@@ -148,36 +172,70 @@ test_supported_backend_endpoint_records_validate() {
     "backend=cmux" "cmux_workspace_id=workspace-1" "cmux_surface_id=surface-2"
   fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid cmux endpoint refused"
 
+  fm_backend_legacy_worktree_matches() {
+    case "$2" in
+      legacy-herdr|legacy-zellij|legacy-orca|legacy-cmux|legacy-crossed) return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  fm_backend_legacy_live_binding_matches() {
+    case "$2:$3" in
+      legacy-herdr:herdr|legacy-zellij:zellij|legacy-cmux:cmux)
+        return 0
+        ;;
+      *) return 1 ;;
+    esac
+  }
+
   id=legacy-herdr
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=lab:w1:p12" "worktree=$dir/worktree" "project=$dir/project" \
     "backend=herdr" "herdr_session=lab" "herdr_workspace_id=w1" "herdr_tab_id=w1:t12" "herdr_pane_id=w1:p12"
-  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy Herdr endpoint refused"
+  ! fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null || fail "unmigrated legacy Herdr endpoint passed current validation"
+  fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "proven legacy Herdr endpoint did not migrate"
+  assert_grep "endpoint_task_id=$id" "$dir/home/state/$id.meta" "legacy Herdr migration omitted task binding"
 
   id=legacy-zellij
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=lab:17" "worktree=$dir/worktree" "project=$dir/project" \
     "backend=zellij" "zellij_session=lab" "zellij_tab_id=13" "zellij_pane_id=17"
-  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy Zellij endpoint refused"
+  ! fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null || fail "unmigrated legacy Zellij endpoint passed current validation"
+  fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "proven legacy Zellij endpoint did not migrate"
+  assert_grep "endpoint_task_id=$id" "$dir/home/state/$id.meta" "legacy Zellij migration omitted task binding"
 
   id=legacy-orca
   fm_write_meta "$dir/home/state/$id.meta" \
-    "window=fm-$id" "terminal=term-legacy" "worktree=$dir/worktree" "project=$dir/project" \
+    "window=fm-$id" "worktree=$dir/worktree" "project=$dir/project" \
     "backend=orca" "orca_worktree_id=worktree-legacy"
-  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy Orca endpoint refused"
+  ! fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null || fail "unmigrated legacy Orca endpoint passed current validation"
+  fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "proven legacy Orca worktree did not migrate"
+  assert_grep "endpoint_task_id=$id" "$dir/home/state/$id.meta" "legacy Orca migration omitted task binding"
+  assert_grep "legacy_endpoint_cleanup=skip-terminal" "$dir/home/state/$id.meta" "legacy Orca migration did not suppress unproven terminal cleanup"
+  [ -z "$FM_BACKEND_VALIDATED_TARGET" ] || fail "legacy Orca migration retained an unproven terminal cleanup target"
 
   id=legacy-orca-recovery
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=fm-$id" "worktree=" "project=$dir/project" \
     "backend=orca" "orca_worktree_id=worktree-legacy-recovery"
-  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy Orca recovery refused"
-  [ -z "$FM_BACKEND_VALIDATED_TARGET" ] || fail "legacy Orca recovery invented a terminal cleanup target"
+  ! fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null \
+    || fail "pathless unbound legacy Orca recovery migrated without task-bound provenance"
+  assert_no_grep 'endpoint_task_id=' "$dir/home/state/$id.meta" "refused pathless legacy Orca recovery gained a binding"
 
   id=legacy-cmux
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=workspace-11:surface-12" "worktree=$dir/worktree" "project=$dir/project" \
     "backend=cmux" "cmux_workspace_id=workspace-11" "cmux_surface_id=surface-12"
-  fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "valid legacy cmux endpoint refused"
+  ! fm_backend_validate_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null || fail "unmigrated legacy cmux endpoint passed current validation"
+  fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" || fail "proven legacy cmux endpoint did not migrate"
+  assert_grep "endpoint_task_id=$id" "$dir/home/state/$id.meta" "legacy cmux migration omitted task binding"
+
+  id=legacy-crossed
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=lab:71" "worktree=$dir/worktree" "project=$dir/project" \
+    "backend=zellij" "zellij_session=lab" "zellij_tab_id=31" "zellij_pane_id=71"
+  ! fm_backend_migrate_legacy_task_endpoint "$dir/home/state/$id.meta" "$id" 2>/dev/null \
+    || fail "crossed legacy endpoint migrated without a matching live task label"
+  assert_no_grep 'endpoint_task_id=' "$dir/home/state/$id.meta" "crossed legacy endpoint gained a binding"
 
   id=orca-recovery
   fm_write_meta "$dir/home/state/$id.meta" \
@@ -193,7 +251,7 @@ test_supported_backend_endpoint_records_validate() {
     set -e
     [ "$target" -ne 0 ] || fail "$backend generic kill accepted an empty target"
   done
-  pass "cleanup identity: current, legacy, and Orca recovery records validate while every empty backend kill target refuses"
+  pass "cleanup identity: current records validate, proven legacy records migrate, and crossed or pathless legacy records refuse"
 }
 
 test_tmux_empty_target_refuses_without_invocation() {
@@ -319,6 +377,7 @@ SH
 }
 
 test_invalid_endpoint_records_refuse_before_mutation
+test_legacy_worktree_provenance
 test_supported_backend_endpoint_records_validate
 test_tmux_empty_target_refuses_without_invocation
 test_recorded_process_identity_cleanup_is_exact

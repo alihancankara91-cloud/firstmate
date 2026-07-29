@@ -360,13 +360,12 @@ fm_backend_target_of_meta() {  # <meta-file>
   [ -n "$window" ] && printf '%s' "$window"
 }
 
-# fm_backend_validate_task_endpoint: validate a task cleanup record entirely
+# fm_backend_validate_task_endpoint: validate a current task cleanup record
 # from its durable metadata before any runtime command or cleanup mutation.
 # The validation binds the exact task id, selected backend, target, project,
-# and worktree. New records carry endpoint_task_id, while legacy records
-# without it remain valid only when every backend-specific identity field is
-# exact and internally consistent. Legacy tmux records additionally require
-# their window name itself to be exactly fm-<task-id>.
+# and worktree. Legacy tmux records remain valid when their window name itself
+# is exactly fm-<task-id>. Opaque legacy records use the separate corroborated
+# migration path before this validator will accept them.
 # On success, sets FM_BACKEND_VALIDATED_BACKEND and
 # FM_BACKEND_VALIDATED_TARGET. On failure, prints one refusal and returns 1.
 fm_backend_meta_exact_value() {  # <meta-file> <key>
@@ -384,9 +383,11 @@ fm_backend_endpoint_atom_valid() {  # <value>
   esac
 }
 
-fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
+fm_backend_validate_task_endpoint_impl() {  # <meta-file> <task-id> <current|legacy-structure>
+  local validation_mode=$3
   local meta=$1 id=$2 backend_count backend window worktree_count worktree project binding_count binding
-  local recovery_count recovery session pane recorded_session workspace tab terminal_count terminal worktree_id surface
+  local recovery_count recovery legacy_cleanup_count legacy_cleanup
+  local session pane recorded_session workspace tab terminal_count terminal worktree_id surface
   FM_BACKEND_VALIDATED_BACKEND=
   FM_BACKEND_VALIDATED_TARGET=
   [ -f "$meta" ] && [ ! -L "$meta" ] || {
@@ -433,6 +434,10 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: endpoint metadata belongs to task $binding, not $id; preserving task state." >&2
     return 1
   fi
+  if [ -z "$binding" ] && [ "$backend" != tmux ] && [ "$validation_mode" != legacy-structure ]; then
+    echo "REFUSED: opaque endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
+    return 1
+  fi
   recovery_count=$(grep -c '^orca_recovery=' "$meta" 2>/dev/null || true)
   case "$recovery_count" in
     0) recovery= ;;
@@ -449,6 +454,25 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   esac
   if [ -n "$recovery" ] && { [ "$backend" != orca ] || [ "$recovery" != worktree-only ] || [ "$binding" != "$id" ]; }; then
     echo "REFUSED: task $id has invalid Orca recovery metadata; preserving task state." >&2
+    return 1
+  fi
+  legacy_cleanup_count=$(grep -c '^legacy_endpoint_cleanup=' "$meta" 2>/dev/null || true)
+  case "$legacy_cleanup_count" in
+    0) legacy_cleanup= ;;
+    1)
+      legacy_cleanup=$(fm_backend_meta_exact_value "$meta" legacy_endpoint_cleanup) || {
+        echo "REFUSED: task $id has an empty legacy cleanup identity; preserving task state." >&2
+        return 1
+      }
+      ;;
+    *)
+      echo "REFUSED: task $id has an ambiguous legacy cleanup identity; preserving task state." >&2
+      return 1
+      ;;
+  esac
+  if [ -n "$legacy_cleanup" ] \
+    && { [ "$backend" != orca ] || [ "$legacy_cleanup" != skip-terminal ] || [ "$binding" != "$id" ]; }; then
+    echo "REFUSED: task $id has invalid legacy cleanup metadata; preserving task state." >&2
     return 1
   fi
   worktree_count=$(grep -c '^worktree=' "$meta" 2>/dev/null || true)
@@ -517,7 +541,8 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
           ;;
       esac
       worktree_id=$(fm_backend_meta_exact_value "$meta" orca_worktree_id) || worktree_id=
-      if [ -z "$terminal" ] && [ -n "$binding" ] && [ "$recovery" != worktree-only ]; then
+      if [ -z "$terminal" ] && [ -n "$binding" ] \
+        && [ "$recovery" != worktree-only ] && [ "$legacy_cleanup" != skip-terminal ]; then
         echo "REFUSED: missing terminal in $meta; cannot close Orca endpoint; preserving task state." >&2
         return 1
       fi
@@ -532,6 +557,7 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
         return 1
       fi
       window=$terminal
+      [ "$legacy_cleanup" != skip-terminal ] || window=
       ;;
     cmux)
       workspace=$(fm_backend_meta_exact_value "$meta" cmux_workspace_id) || workspace=
@@ -549,6 +575,132 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
   # shellcheck disable=SC2034 # Output globals are consumed by sourcing callers.
   FM_BACKEND_VALIDATED_TARGET=$window
   return 0
+}
+
+fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
+  fm_backend_validate_task_endpoint_impl "$1" "$2" current
+}
+
+fm_backend_validate_legacy_task_endpoint_structure() {  # <meta-file> <task-id>
+  fm_backend_validate_task_endpoint_impl "$1" "$2" legacy-structure
+}
+
+fm_backend_existing_dir_equal() {  # <left> <right>
+  local left=$1 right=$2 left_real right_real
+  left_real=$(cd "$left" 2>/dev/null && pwd -P) || return 1
+  right_real=$(cd "$right" 2>/dev/null && pwd -P) || return 1
+  [ "$left_real" = "$right_real" ]
+}
+
+fm_backend_legacy_worktree_matches() {  # <meta-file> <task-id> <backend>
+  local meta=$1 id=$2 backend=$3 worktree project kind home marker top branch listed registered=0 resolved
+  worktree=$(fm_backend_meta_exact_value "$meta" worktree) || return 1
+  project=$(fm_backend_meta_exact_value "$meta" project) || return 1
+  kind=$(fm_meta_get "$meta" kind)
+  if [ "$kind" = secondmate ]; then
+    home=$(fm_backend_meta_exact_value "$meta" home) || return 1
+    fm_backend_existing_dir_equal "$worktree" "$home" || return 1
+    marker="$home/.fm-secondmate-home"
+    [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
+    [ "$(sed -n '1p' "$marker" 2>/dev/null)" = "$id" ] || return 1
+    return 0
+  fi
+  top=$(git -C "$worktree" rev-parse --show-toplevel 2>/dev/null) || return 1
+  fm_backend_existing_dir_equal "$worktree" "$top" || return 1
+  branch=$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 1
+  [ "$branch" = "fm/$id" ] || return 1
+  while IFS= read -r listed; do
+    [ -n "$listed" ] || continue
+    if fm_backend_existing_dir_equal "$worktree" "$listed"; then
+      registered=1
+      break
+    fi
+  done <<EOF
+$(git -C "$project" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+EOF
+  [ "$registered" = 1 ] || return 1
+  if [ "$backend" = orca ]; then
+    resolved=$(fm_backend_worktree_path orca "$(fm_backend_meta_exact_value "$meta" orca_worktree_id)") || return 1
+    fm_backend_existing_dir_equal "$worktree" "$resolved" || return 1
+  fi
+}
+
+fm_backend_legacy_live_binding_matches() {  # <meta-file> <task-id> <backend> <target>
+  local meta=$1 id=$2 backend=$3 target=$4 session workspace tab pane
+  case "$backend" in
+    herdr)
+      fm_backend_source herdr || return 1
+      session=$(fm_backend_meta_exact_value "$meta" herdr_session) || return 1
+      workspace=$(fm_backend_meta_exact_value "$meta" herdr_workspace_id) || return 1
+      tab=$(fm_backend_meta_exact_value "$meta" herdr_tab_id) || return 1
+      pane=$(fm_backend_meta_exact_value "$meta" herdr_pane_id) || return 1
+      fm_backend_herdr_task_binding_matches "$session" "$workspace" "$tab" "$pane" "fm-$id" || return 1
+      ;;
+    zellij)
+      fm_backend_source zellij || return 1
+      fm_backend_zellij_parse_target "$target" || return 1
+      tab=$(fm_backend_zellij_tab_for_pane "$FM_BACKEND_ZELLIJ_SESSION" "$FM_BACKEND_ZELLIJ_PANE" 2>/dev/null)
+      [ "$tab" = "$(fm_backend_meta_exact_value "$meta" zellij_tab_id)" ] || return 1
+      fm_backend_zellij_tab_matches_label "$FM_BACKEND_ZELLIJ_SESSION" "$tab" "fm-$id" || return 1
+      ;;
+    cmux)
+      fm_backend_source cmux || return 1
+      fm_backend_cmux_target_ready "$target" "fm-$id" || return 1
+      ;;
+    orca)
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+fm_backend_migrate_legacy_task_endpoint() {  # <meta-file> <task-id>
+  local meta=$1 id=$2 backend target before after stage tmp legacy_cleanup=
+  fm_backend_validate_legacy_task_endpoint_structure "$meta" "$id" || return 1
+  before=$(cksum "$meta" 2>/dev/null) || return 1
+  backend=$FM_BACKEND_VALIDATED_BACKEND
+  target=$FM_BACKEND_VALIDATED_TARGET
+  [ "$backend" != tmux ] || return 0
+  fm_backend_legacy_worktree_matches "$meta" "$id" "$backend" || {
+    echo "REFUSED: legacy $backend metadata for task $id lacks exact worktree provenance; preserving task state." >&2
+    return 1
+  }
+  if [ "$backend" = orca ]; then
+    legacy_cleanup=skip-terminal
+  else
+    fm_backend_legacy_live_binding_matches "$meta" "$id" "$backend" "$target" || {
+      echo "REFUSED: legacy $backend metadata for task $id lacks a live task-bound endpoint; preserving task state." >&2
+      return 1
+    }
+  fi
+  after=$(cksum "$meta" 2>/dev/null) || {
+    return 1
+  }
+  if [ "$after" != "$before" ]; then
+    echo "REFUSED: task $id metadata changed during legacy authentication; preserving task state." >&2
+    return 1
+  fi
+  stage=$(mktemp -d "${meta}.migrate.XXXXXX") || return 1
+  tmp="$stage/$id.meta"
+  if ! cp -p "$meta" "$tmp" \
+    || [ "$(cksum "$meta" 2>/dev/null)" != "$before" ] \
+    || ! printf 'endpoint_task_id=%s\n' "$id" >> "$tmp" \
+    || { [ -n "$legacy_cleanup" ] && ! printf 'legacy_endpoint_cleanup=%s\n' "$legacy_cleanup" >> "$tmp"; } \
+    || ! fm_backend_validate_task_endpoint "$tmp" "$id"; then
+    rm -f "$tmp"
+    rmdir "$stage" 2>/dev/null || true
+    echo "REFUSED: task $id metadata could not be migrated safely; preserving task state." >&2
+    return 1
+  fi
+  mv "$tmp" "$meta" || {
+    rm -f "$tmp"
+    rmdir "$stage" 2>/dev/null || true
+    return 1
+  }
+  rmdir "$stage" 2>/dev/null || true
+  fm_backend_validate_task_endpoint "$meta" "$id"
 }
 
 fm_backend_meta_for_window() {  # <target> <state-dir>
