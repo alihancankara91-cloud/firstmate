@@ -36,6 +36,14 @@ test_profile_security_contract() {
     "global-rules access must stay inside the native Codex process filter"
   [ "$(grep -Fc '(literal global-rules-file)' "$PROFILE")" -eq 1 ] \
     || fail "global-rules file must have exactly one native read allowance"
+  assert_contains "$native_scope" '(allow file-ioctl' \
+    "terminal ioctl access must stay inside the native Codex process filter"
+  assert_contains "$native_scope" '(literal tty-path)' \
+    "terminal ioctl access must bind the exact discovered terminal"
+  [ "$(grep -Fc '(literal tty-path)' "$PROFILE")" -eq 1 ] \
+    || fail "terminal path must have exactly one native ioctl allowance"
+  assert_not_contains "$PROFILE" '(subpath "/dev")' \
+    "terminal startup must not open the whole device namespace"
   assert_grep '(remote ip "localhost:*")' "$PROFILE" \
     "Seatbelt profile must block every loopback TCP destination"
   assert_grep '(literal no-mistakes-socket)' "$PROFILE" \
@@ -168,6 +176,8 @@ test_wrapper_sanitizes_environment_and_binds_exact_paths() {
     "wrapper did not bind the exact main-home turn-end path"
   assert_contains "$args" "TLS_TRUST_DIR=/private/etc/ssl" \
     "wrapper did not bind the exact macOS TLS trust directory"
+  assert_contains "$args" "TTY_PATH=/dev/null" \
+    "headless wrapper launch did not bind the inert terminal path"
   assert_contains "$args" "GLOBAL_RULES_FILE=$rules_file" \
     "wrapper did not resolve the three global-rules aliases to one exact file"
   assert_contains "$args" "--dangerously-bypass-approvals-and-sandbox" \
@@ -291,11 +301,11 @@ test_native_only_exact_global_rules_read() {
     -D "GIT_COMMON_DIR=$git_dir" -D "TASK_DATA_DIR=$task_data" \
     -D "STATUS_PATH=$status" -D "NOTIFY_PATH=$notify" \
     -D "CAGE_TMP=$cage_tmp" -D "CODEX_HOME=$codex_home" \
-    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "CODEX_NATIVE=/usr/bin/head" \
-    -D "CODEX_INSTALL_ROOT=/usr/bin" -D "LOCAL_BIN_DIR=/usr/bin" \
-    -D "NPX_ROOT=/usr/bin" -D "NO_MISTAKES_BIN_DIR=/usr/bin" \
-    -D "NO_MISTAKES_SOCKET=/dev/null" -D "GLOBAL_RULES_FILE=$rules" \
-    /usr/bin/head -n 1 "$rules" 2>&1) \
+    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "TTY_PATH=/dev/null" \
+    -D "CODEX_NATIVE=/usr/bin/head" -D "CODEX_INSTALL_ROOT=/usr/bin" \
+    -D "LOCAL_BIN_DIR=/usr/bin" -D "NPX_ROOT=/usr/bin" \
+    -D "NO_MISTAKES_BIN_DIR=/usr/bin" -D "NO_MISTAKES_SOCKET=/dev/null" \
+    -D "GLOBAL_RULES_FILE=$rules" /usr/bin/head -n 1 "$rules" 2>&1) \
     || fail "native process could not read the exact global-rules file: $out"
   [ "$out" = "synthetic canonical rules" ] \
     || fail "native global-rules read returned unexpected content: $out"
@@ -306,11 +316,11 @@ test_native_only_exact_global_rules_read() {
     -D "GIT_COMMON_DIR=$git_dir" -D "TASK_DATA_DIR=$task_data" \
     -D "STATUS_PATH=$status" -D "NOTIFY_PATH=$notify" \
     -D "CAGE_TMP=$cage_tmp" -D "CODEX_HOME=$codex_home" \
-    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "CODEX_NATIVE=/usr/bin/head" \
-    -D "CODEX_INSTALL_ROOT=/usr/bin" -D "LOCAL_BIN_DIR=/usr/bin" \
-    -D "NPX_ROOT=/usr/bin" -D "NO_MISTAKES_BIN_DIR=/usr/bin" \
-    -D "NO_MISTAKES_SOCKET=/dev/null" -D "GLOBAL_RULES_FILE=$rules" \
-    /usr/bin/head -n 1 "$sibling" 2>&1)
+    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "TTY_PATH=/dev/null" \
+    -D "CODEX_NATIVE=/usr/bin/head" -D "CODEX_INSTALL_ROOT=/usr/bin" \
+    -D "LOCAL_BIN_DIR=/usr/bin" -D "NPX_ROOT=/usr/bin" \
+    -D "NO_MISTAKES_BIN_DIR=/usr/bin" -D "NO_MISTAKES_SOCKET=/dev/null" \
+    -D "GLOBAL_RULES_FILE=$rules" /usr/bin/head -n 1 "$sibling" 2>&1)
   rc=$?
   set -e
   [ "$rc" -ne 0 ] || fail "native process read a sibling of the bound rules file"
@@ -324,10 +334,11 @@ test_native_only_exact_global_rules_read() {
     -D "GIT_COMMON_DIR=$git_dir" -D "TASK_DATA_DIR=$task_data" \
     -D "STATUS_PATH=$status" -D "NOTIFY_PATH=$notify" \
     -D "CAGE_TMP=$cage_tmp" -D "CODEX_HOME=$codex_home" \
-    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "CODEX_NATIVE=/bin/zsh" \
-    -D "CODEX_INSTALL_ROOT=/usr/bin" -D "LOCAL_BIN_DIR=/usr/bin" \
-    -D "NPX_ROOT=/usr/bin" -D "NO_MISTAKES_BIN_DIR=/usr/bin" \
-    -D "NO_MISTAKES_SOCKET=/dev/null" -D "GLOBAL_RULES_FILE=$rules" \
+    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "TTY_PATH=/dev/null" \
+    -D "CODEX_NATIVE=/bin/zsh" -D "CODEX_INSTALL_ROOT=/usr/bin" \
+    -D "LOCAL_BIN_DIR=/usr/bin" -D "NPX_ROOT=/usr/bin" \
+    -D "NO_MISTAKES_BIN_DIR=/usr/bin" -D "NO_MISTAKES_SOCKET=/dev/null" \
+    -D "GLOBAL_RULES_FILE=$rules" \
     /bin/zsh -c 'printf changed > "$1"' _ "$rules" 2>&1)
   rc=$?
   set -e
@@ -344,10 +355,11 @@ test_native_only_exact_global_rules_read() {
     -D "GIT_COMMON_DIR=$git_dir" -D "TASK_DATA_DIR=$task_data" \
     -D "STATUS_PATH=$status" -D "NOTIFY_PATH=$notify" \
     -D "CAGE_TMP=$cage_tmp" -D "CODEX_HOME=$codex_home" \
-    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "CODEX_NATIVE=/usr/bin/head" \
-    -D "CODEX_INSTALL_ROOT=/usr/bin" -D "LOCAL_BIN_DIR=/usr/bin" \
-    -D "NPX_ROOT=/usr/bin" -D "NO_MISTAKES_BIN_DIR=/usr/bin" \
-    -D "NO_MISTAKES_SOCKET=/dev/null" -D "GLOBAL_RULES_FILE=$rules" \
+    -D "TLS_TRUST_DIR=/private/etc/ssl" -D "TTY_PATH=/dev/null" \
+    -D "CODEX_NATIVE=/usr/bin/head" -D "CODEX_INSTALL_ROOT=/usr/bin" \
+    -D "LOCAL_BIN_DIR=/usr/bin" -D "NPX_ROOT=/usr/bin" \
+    -D "NO_MISTAKES_BIN_DIR=/usr/bin" -D "NO_MISTAKES_SOCKET=/dev/null" \
+    -D "GLOBAL_RULES_FILE=$rules" \
     /bin/zsh -c 'IFS= read -r line < "$1"' _ "$rules" 2>&1)
   rc=$?
   set -e
@@ -355,6 +367,95 @@ test_native_only_exact_global_rules_read() {
   assert_contains "$out" "operation not permitted" \
     "child-shell probe did not receive an operating-system denial"
   pass "only the native process reads the exact rules file while siblings and child shells remain denied"
+}
+
+test_native_only_exact_terminal_ioctl() {
+  local fixture fakebin synthetic_home result allowed_seen allowed_rc denied_seen denied_rc
+  [ "$(/usr/bin/uname -s)" = Darwin ] || {
+    echo "skip: exact terminal ioctl probe requires macOS"
+    return 0
+  }
+  command -v /usr/bin/expect >/dev/null 2>&1 \
+    || fail "exact terminal ioctl probe requires the macOS expect command"
+
+  fixture="$TMP_ROOT/tty-repo"
+  fakebin="$TMP_ROOT/tty-fakebin"
+  synthetic_home="$TMP_ROOT/tty-home"
+  result="$TMP_ROOT/tty-probe.result"
+  mkdir -p "$fixture/data" "$fixture/state" "$fakebin" "$synthetic_home/.codex"
+  git -C "$fixture" init -q
+  ln -s /bin/stty "$fakebin/codex"
+
+  if ! HOME="$synthetic_home" CODEX_HOME="$synthetic_home/.codex" \
+    PATH="$fakebin:$PATH" CAGE="$CAGE" WORKTREE="$fixture" \
+    TASK_DATA="$fixture/data" STATUS="$fixture/state/status" \
+    NOTIFY="$fixture/state/turn-ended" RESULT="$result" \
+    /usr/bin/expect <<'EXPECT'
+set timeout 10
+log_user 0
+cd $env(WORKTREE)
+spawn -noecho $env(CAGE) \
+  --worktree $env(WORKTREE) \
+  --task-data-dir $env(TASK_DATA) \
+  --status-path $env(STATUS) \
+  --notify-path $env(NOTIFY) \
+  --fm-home $env(WORKTREE) \
+  -- codex -a
+set saw_speed 0
+expect {
+  -re {speed [0-9]+ baud} { set saw_speed 1; exp_continue }
+  eof {}
+  timeout { exit 124 }
+}
+set child_status [lindex [wait] 3]
+set result [open $env(RESULT) w]
+puts $result "$saw_speed $child_status"
+close $result
+EXPECT
+  then
+    fail "native exact-terminal ioctl probe did not complete"
+  fi
+  read -r allowed_seen allowed_rc <"$result"
+  [ "$allowed_seen:$allowed_rc" = "1:0" ] \
+    || fail "native process could not inspect its exact controlling terminal: $(cat "$result")"
+
+  rm "$fakebin/codex"
+  ln -s /bin/zsh "$fakebin/codex"
+  if ! HOME="$synthetic_home" CODEX_HOME="$synthetic_home/.codex" \
+    PATH="$fakebin:$PATH" CAGE="$CAGE" WORKTREE="$fixture" \
+    TASK_DATA="$fixture/data" STATUS="$fixture/state/status" \
+    NOTIFY="$fixture/state/turn-ended" RESULT="$result" \
+    /usr/bin/expect <<'EXPECT'
+set timeout 10
+log_user 0
+cd $env(WORKTREE)
+spawn -noecho $env(CAGE) \
+  --worktree $env(WORKTREE) \
+  --task-data-dir $env(TASK_DATA) \
+  --status-path $env(STATUS) \
+  --notify-path $env(NOTIFY) \
+  --fm-home $env(WORKTREE) \
+  -- codex -c {/bin/stty -a}
+set saw_denial 0
+expect {
+  -re {Operation not permitted} { set saw_denial 1; exp_continue }
+  eof {}
+  timeout { exit 124 }
+}
+set child_status [lindex [wait] 3]
+set result [open $env(RESULT) w]
+puts $result "$saw_denial $child_status"
+close $result
+EXPECT
+  then
+    fail "child-process terminal ioctl probe did not complete"
+  fi
+  read -r denied_seen denied_rc <"$result"
+  [ "$denied_seen" -eq 1 ] \
+    || fail "child process did not receive an operating-system terminal ioctl denial"
+  [ "$denied_rc" -ne 0 ] \
+    || fail "child process unexpectedly inspected the controlling terminal"
+  pass "only native Codex can inspect the exact controlling terminal while child processes remain denied"
 }
 
 test_public_github_clone_helper() {
@@ -438,6 +539,7 @@ if [ "$(/usr/bin/uname -s)" = Darwin ]; then
   test_wrapper_sanitizes_environment_and_binds_exact_paths
   test_wrapper_refuses_missing_and_unsafe_global_rules_targets
   test_native_only_exact_global_rules_read
+  test_native_only_exact_terminal_ioctl
 fi
 test_public_github_clone_helper
 test_live_harness_preserves_evidence

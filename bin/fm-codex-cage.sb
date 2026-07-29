@@ -17,6 +17,7 @@
 (define codex-home (param "CODEX_HOME"))
 (define global-rules-file (param "GLOBAL_RULES_FILE"))
 (define tls-trust-dir (param "TLS_TRUST_DIR"))
+(define tty-path (param "TTY_PATH"))
 (define codex-native (param "CODEX_NATIVE"))
 (define codex-install-root (param "CODEX_INSTALL_ROOT"))
 (define local-bin-dir (param "LOCAL_BIN_DIR"))
@@ -60,14 +61,18 @@
 ;; Only the discovered Codex native process may load its user configuration,
 ;; authentication store, and the one exact resolved canonical global-rules
 ;; file discovered by the wrapper.
+;; Interactive Codex may issue terminal-control ioctls only against the exact
+;; controlling macOS PTY discovered by the wrapper.
 ;; Model-launched shells inherit the cage but have a different process path, so
-;; they cannot read these files.
+;; they cannot use these protected allowances.
 (with-filter (process-path codex-native)
   (allow file-read* file-test-existence
     (subpath codex-home)
     (literal global-rules-file))
   (allow file-write*
-    (subpath codex-home)))
+    (subpath codex-home))
+  (allow file-ioctl
+    (literal tty-path)))
 
 ;; Writes are limited to the task and exact Firstmate lifecycle surfaces.
 (allow file-write*

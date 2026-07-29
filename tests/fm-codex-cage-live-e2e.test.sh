@@ -108,6 +108,7 @@ TLS_OUTPUT=$(
       -D "CODEX_HOME=$REPO" \
       -D "GLOBAL_RULES_FILE=/dev/null" \
       -D "TLS_TRUST_DIR=/private/etc/ssl" \
+      -D "TTY_PATH=/dev/null" \
       -D "CODEX_NATIVE=/usr/bin/curl" \
       -D "CODEX_INSTALL_ROOT=/usr/bin" \
       -D "LOCAL_BIN_DIR=/usr/bin" \
