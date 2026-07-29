@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Behavior tests for per-task GOTMPDIR support (fm-gotmp).
 #
-# fm-spawn gives each task a temp root /tmp/fm-<id>/ with Go's build temp nested at
-# gotmp/, exports GOTMPDIR into the crewmate pane, and records tasktmp= in the task's
-# meta. fm-teardown reads tasktmp= and removes the whole root on cleanup.
+# fm-spawn gives each task a home-scoped temp root with Go's build temp nested
+# at gotmp/, exports GOTMPDIR into the crewmate pane, and records tasktmp= in the
+# task meta. fm-teardown reads tasktmp= and removes the whole root on cleanup.
 #
 # These tests exercise behavior directly: fm-teardown is run as a subprocess against a
 # fake FM_HOME/FM_ROOT (built so the real script resolves into it), with stub helper scripts.
@@ -107,6 +107,9 @@ test_spawn_contract_and_mkdir_pattern() {
   # shellcheck disable=SC2016  # single quotes are deliberate: these are literal source strings
   grep -F 'mkdir -p "$TASK_TMP/gotmp"' "$SPAWN" >/dev/null \
     || fail "fm-spawn missing: mkdir of gotmp under TASK_TMP"
+  # shellcheck disable=SC2016  # single quotes are deliberate: this is a literal source string
+  grep -F 'TASK_TMP="/tmp/fm-$HOME_TAG/$ID"' "$SPAWN" >/dev/null \
+    || fail "fm-spawn missing: home-scoped task temp root"
   # shellcheck disable=SC2016  # single quotes are deliberate: literal source string
   grep -F 'echo "tasktmp=$TASK_TMP"' "$SPAWN" >/dev/null \
     || fail "fm-spawn missing: tasktmp= line in meta write"
