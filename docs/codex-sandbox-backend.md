@@ -101,6 +101,46 @@ ok - only native Codex can inspect the exact controlling terminal while child pr
 The final end-to-end check allocated a PTY from this real Treehouse Firstmate worktree and used the complete `fm-spawn` Codex argument shape: model `gpt-5.6-sol`, effort `high`, bypass mode, the notify hook against its separately bound task state path, and a launch brief encoded by `fm-operational-input.sh`.
 The existing live acceptance separately retained the outside-worktree lifecycle-path checks for task status, report, and turn-end delivery.
 The cage remained mandatory and the TUI's normal warnings for separately denied hooks and MCP startup paths were not opened by this fix.
+The retained permitted host-lane command was:
+
+```sh
+fm_home=/Users/ackinvestment/firstmate
+worktree=/Users/ackinvestment/.treehouse/firstmate-3aecb2/2/firstmate
+task_data_dir="$fm_home/data/fm-codex-cage-launch-regression"
+status_path="$fm_home/state/fm-codex-cage-launch-regression.status"
+notify_path="$fm_home/state/fm-codex-cage-launch-regression.turn-ended"
+transcript="$task_data_dir/treehouse-tui.transcript"
+mkdir -p "$task_data_dir" "$(dirname "$status_path")"
+prompt=$(printf '%s\n' 'Reply exactly CAGE_TREEHOUSE_ANSWERED.' |
+  "$fm_home/bin/fm-operational-input.sh" encode launch-brief)
+notify_config="notify=[\"bash\",\"-c\",\"touch '$notify_path'\"]"
+cd "$worktree"
+FM_HOME="$fm_home" WORKTREE="$worktree" TASK_DATA_DIR="$task_data_dir" \
+  STATUS_PATH="$status_path" NOTIFY_PATH="$notify_path" \
+  NOTIFY_CONFIG="$notify_config" PROMPT="$prompt" TRANSCRIPT="$transcript" \
+  /usr/bin/expect <<'EXPECT'
+set timeout 180
+log_file -noappend $env(TRANSCRIPT)
+spawn -noecho $env(FM_HOME)/bin/fm-codex-cage.sh \
+  --worktree $env(WORKTREE) \
+  --task-data-dir $env(TASK_DATA_DIR) \
+  --status-path $env(STATUS_PATH) \
+  --notify-path $env(NOTIFY_PATH) \
+  --fm-home $env(FM_HOME) \
+  -- codex --model gpt-5.6-sol \
+  -c {model_reasoning_effort="high"} \
+  --dangerously-bypass-approvals-and-sandbox \
+  -c $env(NOTIFY_CONFIG) $env(PROMPT)
+expect {
+  -re {CAGE_TREEHOUSE_ANSWERED} {}
+  eof {}
+  timeout { exit 124 }
+}
+EXPECT
+```
+
+This command ran only in the permitted real host lane, where the cage gives native Codex its process-filtered access to the existing real `CODEX_HOME`.
+No credential was copied or exposed, and no synthetic or sandboxed diagnostic lane received the real `CODEX_HOME`.
 The exact outcome summary was:
 
 ```text
@@ -108,9 +148,9 @@ turn-ended=true
 answer-present=true
 fatal-startup-denial=false
 outcome=turn-ended
+answer CAGE_TREEHOUSE_ANSWERED
 ```
 
-The answer reconstructed from the TUI output was `CAGE_TREEHOUSE_ANSWERED`.
 This is equivalent to the real spawn because `/usr/bin/expect` supplied the same controlling PTY that a supported pane backend supplies, while every cage and Codex argument came from the production launch shape.
 
 ## Global-rules symlink regression evidence
