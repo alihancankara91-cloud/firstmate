@@ -22,3 +22,5 @@
 - Test stubs that set cross-function output globals need an explicit local read for focused ShellCheck.
 - Invoke focused `tests/*.test.sh` files through Bash or `bin/fm-test-run.sh`; executable bits are not guaranteed for every test file.
 - `gh-axi pr list --fields` exposes only the fields shown by its current help; omit unsupported GitHub CLI field names.
+- In isolated local-test worktrees, treat `no-mistakes axi` reporting an uninitialized repository as a setup probe result and do not initialize the gate outside the worktree-local test scope.
+- Decision-hold completion applies only to investigations with task metadata owned by the active Firstmate home.
