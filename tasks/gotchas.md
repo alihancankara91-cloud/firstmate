@@ -1,5 +1,38 @@
 # Gotchas
 
+- A no-mistakes PR worktree may still lack worktree-local gate initialization, so inspect `doctor` before assuming the existing PR run is attachable.
+- Re-read the current task ledger before patching it because another crewmate may have already changed the expected context.
+- A focused portable failure can expose a stale synthetic assertion when a stronger fail-closed validation now rejects the fixture earlier.
+- A fail-fast test can hide later stale assertions for the same contract until its first outdated expectation is corrected.
+- A per-home Herdr E2E teardown must set `FM_HOME` as well as state, data, and config overrides or endpoint ownership resolves against the wrong home.
+- Quote or disable unmatched glob patterns in zsh diagnostic commands because an empty match aborts the command before inspection.
+- Run focused ShellCheck through the repository's configured source graph or with its established exclusions; a bare multi-file invocation reports non-actionable SC1091 and test-harness SC2153 diagnostics.
+- Before a multi-file patch, re-read every target hunk's exact current context; one shifted function signature rejects the entire patch.
+- In a failure-condition OR chain, an optional write guard must return false when the optional value is absent.
+- Use the repository's approved evidence directory for redirected test traces; broad file-removal command forms are rejected even for one exact temporary file.
+- Herdr jq arguments must avoid jq 1.6 reserved identifiers, including `label`.
+- Re-read the exact flagged jq expression before patching because its result-shape predicate may differ from nearby queries.
+- The docs audience checker classifies every changed Markdown file, including workflow task ledgers, so focused source verification must account for those separately.
+- Changed-test selection treats workflow task ledgers as source paths, so conflict-only ledger changes require explicit focused test selection.
+- Locate the audience inventory from the checker defaults before assuming its path.
+- ShellCheck treats a later test-local function override as the definition for earlier calls, so real-helper coverage and stubbed orchestration coverage belong in separate test functions.
+- Patch workflow ledgers separately when their prior-round content is not part of the source context just inspected.
+- Split cross-file patches when one helper signature has evolved, or one stale context rejects otherwise valid changes.
+- Home-scope regression stubs must preserve the function return-code contract while inspecting temporary environment assignments.
+- New multi-branch shell helpers must end successful paths explicitly with zero so `set -e` test runners do not inherit a predicate's incidental status.
+- Preserve backend-specific child cleanup call sequences when home scoping is already correct; extend only the backend missing the ownership context.
+- Focused lint includes informational ShellCheck findings, so test assertions containing literal shell expansions must escape them and dynamic test overrides need local lint annotations.
+- Keep workflow-ledger hunks out of multi-file source patches because stale task text otherwise rejects every unrelated hunk atomically.
+- Producer-side output globals need an explicit local read so focused ShellCheck recognizes their cross-file consumers.
+- Pass at least 10000 milliseconds to collaboration waits, even for a quick mailbox poll.
+- Preserve shell `case` pattern lines without trailing spaces when extending long regression fixture lists.
+- Test stubs that set cross-function output globals need an explicit local read for focused ShellCheck.
+- Always invoke focused `tests/*.test.sh` files through Bash or `bin/fm-test-run.sh`, even when nearby tests run directly; executable bits are not guaranteed for every test file.
+- `gh-axi pr list --fields` exposes only the fields shown by its current help; omit unsupported GitHub CLI field names.
+- In isolated or conflict-resolution worktrees, treat `no-mistakes axi` reporting an uninitialized repository as a setup probe result and do not initialize the gate implicitly.
+- Decision-hold completion applies only to investigations with task metadata owned by the active Firstmate home.
+- Put `rg` patterns containing Markdown backticks in single-quoted shell arguments so command construction cannot leave an unmatched double quote.
+- Verify a target document's exact generated Markdown anchor before adding a cross-reference.
 - `apply_patch` cannot create a file when its parent directory is absent, so create the directory first.
 - A file cannot be added and updated in the same `apply_patch` call.
 - Under macOS Bash 3 with `set -u`, expanding a declared but empty array raises an unbound-variable error, so seed indexed caches with an empty element.

@@ -304,6 +304,52 @@ test_expected_label_refuses_ambiguous_untagged_tab() {
   pass "fm_backend_zellij_tab_matches_label: refuses an untagged legacy label match when 2+ live tabs share it (migration ambiguity guard)"
 }
 
+test_task_binding_status_requires_scoped_home_or_absence() {
+  local dir fb status scoped
+  dir="$TMP_ROOT/task-binding-absent"; mkdir -p "$dir/responses"
+  printf '[]\n' > "$dir/responses/1.out"
+  printf '[]\n' > "$dir/responses/2.out"
+  fb=$(make_zellij_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 2 ] || fail "authoritative missing Zellij pane should return absent status 2, got $status"
+
+  dir="$TMP_ROOT/task-binding-stale-pane"; mkdir -p "$dir/responses"
+  scoped=$(zellij_expected_scoped_title fm-task1)
+  printf '[]\n' > "$dir/responses/1.out"
+  zellij_tab_response "$dir" 2 3 "$scoped"
+  fb=$(make_zellij_fakebin "$dir")
+  PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT" \
+    || fail "own-home scoped Zellij tab with a stale pane was not cleanup-authoritative"
+
+  dir="$TMP_ROOT/task-binding-bare"; mkdir -p "$dir/responses"
+  zellij_pane_response "$dir" 1 7 3
+  zellij_tab_response "$dir" 2 3 fm-task1
+  fb=$(make_zellij_fakebin "$dir")
+  if PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" = 1 ] || fail "live bare Zellij title should return unsafe status 1, got $status"
+
+  dir="$TMP_ROOT/task-binding-scoped"; mkdir -p "$dir/responses"
+  scoped=$(zellij_expected_scoped_title fm-task1)
+  zellij_pane_response "$dir" 1 7 3
+  zellij_tab_response "$dir" 2 3 "$scoped"
+  fb=$(make_zellij_fakebin "$dir")
+  PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
+    bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_task_binding_status firstmate 3 7 fm-task1' "$ROOT" \
+    || fail "own-home scoped Zellij title was not cleanup-authoritative"
+  pass "fm_backend_zellij_task_binding_status: owning tab survives stale leaves while true absence remains distinct"
+}
+
 test_list_live_scopes_to_own_home_tag() {
   local dir fb out own_title foreign_title other_root
   dir="$TMP_ROOT/list-live-scope"; mkdir -p "$dir/responses"
@@ -437,7 +483,7 @@ test_dispatch_routes_zellij_backend() {
 }
 
 test_dispatch_busy_state_unknown_for_zellij() {
-  # shellcheck source=bin/fm-backend.sh
+  # shellcheck source=/dev/null
   . "$ROOT/bin/fm-backend.sh"
   [ "$(fm_backend_busy_state zellij 'firstmate:5')" = unknown ] \
     || fail "fm_backend_busy_state should report unknown for zellij (no native agent-state primitive; D5: watcher falls back to regex, same as tmux)"
@@ -664,18 +710,18 @@ test_current_path_probes_with_marker_and_ignores_prompt_paths() {
   zellij_pane_response "$dir" 4 7 3
   zellij_pane_response "$dir" 6 7 3
   printf '%s\n' 'scratch-e2e-project HEAD' \
-    '/Users/kunchen/src/project ❯ printf marker' \
+    '/home/fixture/src/project ❯ printf marker' \
     '__FM_ZELLIJ_CWD_BEGIN__' \
-    '/Users/kunchen/.treehouse/fake-' \
+    '/home/fixture/.treehouse/fake-' \
     'worktree' \
     '__FM_ZELLIJ_CWD_END__' \
-    '/Users/kunchen/.treehouse/fake-worktree ❯' \
+    '/home/fixture/.treehouse/fake-worktree ❯' \
     > "$dir/responses/7.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_current_path firstmate:7' "$ROOT" )
-  [ "$out" = "/Users/kunchen/.treehouse/fake-worktree" ] || fail "current_path should read only the marked cwd line, got '$out'"
+  [ "$out" = "/home/fixture/.treehouse/fake-worktree" ] || fail "current_path should read only the marked cwd line, got '$out'"
   zellij_assert_call_order "$dir/log" $'\x1f''list-panes'$'\x1f''--json' $'\x1f''paste' \
     "current_path did not verify the pane before the cwd probe paste"
   zellij_assert_call_order "$dir/log" $'\x1f''list-panes'$'\x1f''--json' $'\x1f''dump-screen' \
@@ -695,13 +741,13 @@ test_current_path_ignores_tilde_prefixed_banner_lines() {
   zellij_pane_response "$dir" 4 7 3
   zellij_pane_response "$dir" 6 7 3
   printf '%s\n' "🌳 Entered worktree at ~/.treehouse/scratch-e2e-project/1. Type 'exit' to return." \
-    'scratch-e2e-project HEAD' '__FM_ZELLIJ_CWD_BEGIN__' '/Users/kunchen/.treehouse/real-worktree' '__FM_ZELLIJ_CWD_END__' '❯' \
+    'scratch-e2e-project HEAD' '__FM_ZELLIJ_CWD_BEGIN__' '/home/fixture/.treehouse/real-worktree' '__FM_ZELLIJ_CWD_END__' '❯' \
     > "$dir/responses/7.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_ZELLIJ_LOG="$dir/log" FM_ZELLIJ_RESPONSES="$dir/responses" \
     FM_ZELLIJ_SESSION_LIST="firstmate" \
     bash -c '. "$0/bin/backends/zellij.sh"; fm_backend_zellij_current_path firstmate:7' "$ROOT" )
-  [ "$out" = "/Users/kunchen/.treehouse/real-worktree" ] || fail "current_path should skip the ~-prefixed banner line and read the marked cwd output, got '$out'"
+  [ "$out" = "/home/fixture/.treehouse/real-worktree" ] || fail "current_path should skip the ~-prefixed banner line and read the marked cwd output, got '$out'"
   pass "fm_backend_zellij_current_path: never picks up a ~-prefixed banner line as the answer"
 }
 
@@ -796,8 +842,11 @@ test_teardown_passes_recorded_tab_id_to_zellij_kill() {
   printf 'report\n' > "$data/zghost/report.md"
   fm_write_meta "$state/zghost.meta" \
     "window=firstmate:7" \
+    "endpoint_task_id=zghost" \
     "backend=zellij" \
+    "zellij_session=firstmate" \
     "zellij_tab_id=3" \
+    "zellij_pane_id=7" \
     "worktree=$dir/missing-worktree" \
     "project=$project" \
     "kind=scout" \
@@ -821,13 +870,17 @@ test_teardown_passes_recorded_tab_id_to_zellij_kill() {
 }
 
 test_forced_secondmate_teardown_kills_zellij_children_with_child_home_tag() {
-  local dir state data config home project fb out status child_title
+  local dir state data config home project fb out status child_title parent_title
   dir="$TMP_ROOT/teardown-zellij-secondmate-child"; state="$dir/state"; data="$dir/data"; config="$dir/config"; home="$dir/secondmate-home"; project="$dir/project"
   mkdir -p "$state" "$data" "$config" "$home/state" "$home/data" "$home/config" "$home/projects" "$project" "$dir/responses"
   printf 'smz\n' > "$home/.fm-secondmate-home"
   fm_write_meta "$state/smz.meta" \
     "window=firstmate:99" \
+    "endpoint_task_id=smz" \
     "backend=zellij" \
+    "zellij_session=firstmate" \
+    "zellij_tab_id=99" \
+    "zellij_pane_id=99" \
     "worktree=$home" \
     "project=$home" \
     "kind=secondmate" \
@@ -835,15 +888,23 @@ test_forced_secondmate_teardown_kills_zellij_children_with_child_home_tag() {
     "home=$home"
   fm_write_meta "$home/state/childz.meta" \
     "window=firstmate:7" \
+    "endpoint_task_id=childz" \
     "backend=zellij" \
+    "zellij_session=firstmate" \
     "zellij_tab_id=4" \
+    "zellij_pane_id=7" \
     "worktree=$dir/missing-child-worktree" \
     "project=$project" \
     "kind=scout"
   child_title=$(zellij_expected_scoped_title fm-childz "$home" "$home")
+  parent_title=$(zellij_expected_scoped_title fm-smz "$ROOT" "$ROOT")
   zellij_pane_response "$dir" 1 7 4
   zellij_tab_response "$dir" 2 4 "$child_title"
   printf '[]\n' > "$dir/responses/3.out"
+  zellij_pane_response "$dir" 4 99 99
+  zellij_tab_response "$dir" 5 99 "$parent_title"
+  printf '[]\n' > "$dir/responses/6.out"
+  printf '[]\n' > "$dir/responses/7.out"
   fb=$(make_zellij_fakebin "$dir")
   out=$( PATH="$fb:$PATH" FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
     FM_ROOT_OVERRIDE="$ROOT" \
@@ -853,7 +914,9 @@ test_forced_secondmate_teardown_kills_zellij_children_with_child_home_tag() {
   expect_code 0 "$status" "fm-teardown should force-retire a secondmate with a zellij child: $out"
   assert_contains "$(cat "$dir/log")" $'\x1f''close-tab-by-id'$'\x1f''4' \
     "forced secondmate teardown did not close a child zellij tab scoped to the child home"
-  pass "fm-teardown.sh: force cleanup kills zellij children using the child home tag"
+  assert_contains "$(cat "$dir/log")" $'\x1f''close-tab-by-id'$'\x1f''99' \
+    "forced secondmate teardown did not close the parent-owned secondmate zellij tab"
+  pass "fm-teardown.sh: Zellij children use the child home while secondmate endpoints remain parent-owned"
 }
 
 # --- send_text_submit: delta-based verify-and-retry --------------------------
@@ -1010,7 +1073,7 @@ test_scripts_reject_fm_target_label_mismatch() {
   pass "fm-send: fm-id zellij targets reject pane ids whose tab label no longer matches"
 }
 
-# shellcheck source=bin/fm-backend.sh
+# shellcheck source=/dev/null
 . "$ROOT/bin/fm-backend.sh"
 
 test_version_check_accepts_current_version
@@ -1026,6 +1089,7 @@ test_scoped_title_uses_secondmate_home_label
 test_scoped_title_changes_with_root_path
 test_expected_label_accepts_unambiguous_untagged_legacy_tab
 test_expected_label_refuses_ambiguous_untagged_tab
+test_task_binding_status_requires_scoped_home_or_absence
 test_list_live_scopes_to_own_home_tag
 test_resolve_bare_selector_prefers_scoped_title
 test_resolve_bare_selector_refuses_ambiguous_untagged

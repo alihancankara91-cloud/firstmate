@@ -308,6 +308,40 @@ fm_backend_zellij_tab_matches_label() {  # <session> <tab_id> <label>
   [ "$count" = "1" ]
 }
 
+fm_backend_zellij_task_binding_status() {  # <session> <tab-id> <pane-id> <label>
+  local session=$1 tab_id=$2 pane_id=$3 label=$4 panes tabs pane_count tuple_count scoped scoped_count
+  panes=$(fm_backend_zellij_cli "$session" action list-panes --json 2>/dev/null) || return 1
+  printf '%s' "$panes" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  tabs=$(fm_backend_zellij_cli "$session" action list-tabs --json 2>/dev/null) || return 1
+  printf '%s' "$tabs" | jq -e 'type == "array"' >/dev/null 2>&1 || return 1
+  scoped=$(fm_backend_zellij_scoped_title "$label")
+  scoped_count=$(printf '%s' "$tabs" | jq -r --arg expected_name "$scoped" \
+    '[.[]? | select(.name == $expected_name)] | length' 2>/dev/null) || return 1
+  if [ "$scoped_count" = 0 ]; then
+    pane_count=$(printf '%s' "$panes" | jq -r --argjson pane_ref "$pane_id" \
+      '[.[]? | select(.id == $pane_ref and .is_plugin == false)] | length' 2>/dev/null) || return 1
+    [ "$pane_count" = 0 ] && return 2
+    return 1
+  fi
+  [ "$scoped_count" = 1 ] || return 1
+  fm_backend_zellij_tab_matches_scoped_label_from_json "$tabs" "$tab_id" "$label" || return 1
+  pane_count=$(printf '%s' "$panes" | jq -r --argjson pane_ref "$pane_id" \
+    '[.[]? | select(.id == $pane_ref and .is_plugin == false)] | length' 2>/dev/null) || return 1
+  [ "$pane_count" != 0 ] || return 0
+  [ "$pane_count" = 1 ] || return 1
+  tuple_count=$(printf '%s' "$panes" | jq -r --argjson pane_ref "$pane_id" --argjson tab_ref "$tab_id" \
+    '[.[]? | select(.id == $pane_ref and .tab_id == $tab_ref and .is_plugin == false)] | length' 2>/dev/null) || return 1
+  [ "$tuple_count" = 1 ] || return 1
+  return 0
+}
+
+fm_backend_zellij_tab_matches_scoped_label_from_json() {  # <tabs-json> <tab-id> <label>
+  local tabs=$1 tab_id=$2 label=$3 scoped
+  scoped=$(fm_backend_zellij_scoped_title "$label")
+  printf '%s' "$tabs" | jq -e --argjson tab_ref "$tab_id" --arg expected_name "$scoped" \
+    '[.[]? | select(.tab_id == $tab_ref and .name == $expected_name)] | length == 1' >/dev/null 2>&1
+}
+
 # fm_backend_zellij_create_task: create the task's tab (one terminal pane) in
 # <session>, refusing an existing <label>. Zellij does NOT enforce tab-name
 # uniqueness itself (verified: two tabs can share a name), so the duplicate
@@ -501,8 +535,8 @@ fm_backend_zellij_capture() {  # <target> <lines> [expected-label]
 # also the load-bearing defense against the
 # unconditional-exit-0 CLI quirk documented in the file header: a truly dead
 # target never shows a change, so it correctly reports pending/unknown rather
-# than a false "sent". Echoes empty|pending|unknown|send-failed, the SAME
-# vocabulary fm-send.sh already branches on for tmux and herdr.
+# than a false "sent". Echoes empty|pending|unknown|send-failed, a subset of the
+# proof-carrying submit vocabulary.
 fm_backend_zellij_send_text_submit() {  # <target> <text> <retries> <enter-sleep> <settle> [expected-label]
   local target=$1 text=$2 retries=$3 sleep_s=$4 settle=$5 expected_label=${6:-} typed after i=0
   fm_backend_zellij_send_literal "$target" "$text" "$expected_label" || { printf 'send-failed'; return 0; }
