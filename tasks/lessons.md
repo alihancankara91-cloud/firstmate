@@ -11,3 +11,4 @@
 - Relative path normalization must propagate through override variables when sourced scripts derive their own globals from those overrides.
 - Authenticated durable artifacts require producers and byte-validating consumers to canonicalize path inputs identically.
 - Canonicalize an override before deriving compatibility defaults that inherit its path.
+- Canonicalize every durable path input before producing or validating path-bound bytes.

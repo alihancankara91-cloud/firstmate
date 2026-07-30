@@ -42,3 +42,4 @@
 - Repository discovery must stay rooted in the current worktree because sibling worktrees are outside the permitted review boundary.
 - Normalize an override variable itself before sourcing another entry script that derives globals from that override, or the source can undo the caller's normalized value.
 - Bound direct watcher reproductions because the local browser-reaper stall can mask a later check-path result.
+- Capture the repository root before changing into a path-isolation fixture.

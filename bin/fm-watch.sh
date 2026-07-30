@@ -72,7 +72,28 @@ if [ -n "${FM_ROOT_OVERRIDE:-}" ]; then
   FM_ROOT_OVERRIDE=$FM_ROOT
 fi
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+case "$FM_HOME" in
+  /*) ;;
+  *)
+    FM_WATCH_HOME_INPUT=$FM_HOME
+    FM_HOME=$(CDPATH='' cd -- "$FM_WATCH_HOME_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_HOME directory cannot be resolved: $FM_WATCH_HOME_INPUT" >&2
+      exit 1
+    }
+    ;;
+esac
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+case "$STATE" in
+  /*) ;;
+  *)
+    FM_WATCH_STATE_INPUT=$STATE
+    STATE=$(CDPATH='' cd -- "$FM_WATCH_STATE_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_STATE_OVERRIDE directory cannot be resolved: $FM_WATCH_STATE_INPUT" >&2
+      exit 1
+    }
+    FM_STATE_OVERRIDE=$STATE
+    ;;
+esac
 mkdir -p "$STATE"
 
 # The native event fast-path and only its true dependencies have one narrow

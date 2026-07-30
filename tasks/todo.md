@@ -96,3 +96,11 @@
 - [x] Derive fallback homes only after root normalization.
 - [x] Exercise the unset-home bootstrap-to-watcher path.
 - [x] Run one focused verification.
+
+# Relative X explicit-home review
+
+- [x] Reproduce explicit relative home and state shim rejection.
+- [x] Audit producer and consumer durable path initialization.
+- [x] Canonicalize relative root, home, and state inputs consistently.
+- [x] Exercise explicit relative home and state handoffs.
+- [x] Run one focused verification.

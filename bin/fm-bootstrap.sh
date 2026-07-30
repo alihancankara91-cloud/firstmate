@@ -84,10 +84,44 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+case "$FM_ROOT" in
+  /*) ;;
+  *)
+    FM_BOOTSTRAP_ROOT_INPUT=$FM_ROOT
+    FM_ROOT=$(CDPATH='' cd -- "$FM_BOOTSTRAP_ROOT_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_ROOT directory cannot be resolved: $FM_BOOTSTRAP_ROOT_INPUT" >&2
+      exit 1
+    }
+    ;;
+esac
+if [ -n "${FM_ROOT_OVERRIDE:-}" ]; then
+  FM_ROOT_OVERRIDE=$FM_ROOT
+fi
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+case "$FM_HOME" in
+  /*) ;;
+  *)
+    FM_BOOTSTRAP_HOME_INPUT=$FM_HOME
+    FM_HOME=$(CDPATH='' cd -- "$FM_BOOTSTRAP_HOME_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_HOME directory cannot be resolved: $FM_BOOTSTRAP_HOME_INPUT" >&2
+      exit 1
+    }
+    ;;
+esac
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+case "$STATE" in
+  /*) ;;
+  *)
+    FM_BOOTSTRAP_STATE_INPUT=$STATE
+    STATE=$(CDPATH='' cd -- "$FM_BOOTSTRAP_STATE_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_STATE_OVERRIDE directory cannot be resolved: $FM_BOOTSTRAP_STATE_INPUT" >&2
+      exit 1
+    }
+    FM_STATE_OVERRIDE=$STATE
+    ;;
+esac
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
