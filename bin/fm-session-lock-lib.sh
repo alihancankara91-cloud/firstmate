@@ -31,7 +31,10 @@ fm_harness_ancestry_pid() {
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
-    bc=$(basename "$comm")
+    # Parameter expansion, not basename: ps comm preserves a login shell's
+    # leading-dash name (-zsh) on darwin, and BSD and GNU basename both
+    # option-parse that operand.
+    bc=${comm##*/}
     hit=0; is_claude=0
     if printf '%s' "$bc" | grep -qE "$FM_HARNESS_RE"; then
       hit=1
@@ -69,7 +72,7 @@ fm_harness_pid_alive() {
   local pid=$1 comm args
   kill -0 "$pid" 2>/dev/null || return 1
   comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-  if printf '%s' "$(basename "$comm")" | grep -qE "$FM_HARNESS_RE"; then
+  if printf '%s' "${comm##*/}" | grep -qE "$FM_HARNESS_RE"; then
     return 0
   fi
   case "$comm" in

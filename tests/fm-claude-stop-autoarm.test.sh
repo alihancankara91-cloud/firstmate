@@ -438,6 +438,80 @@ test_fm_lock_status_still_works_with_shared_lib() {
   pass "fm-lock: shared session-lock lib preserves the status path"
 }
 
+# A stubbed ps whose process table is a darwin login-shell chain: every
+# process reports comm as -zsh (ps -o comm= on macOS preserves a login
+# shell's leading-dash argv[0] name) except the harness pid named by
+# FM_TEST_HARNESS_PID; the first hop's parent is that harness, whose own
+# parent is init. Both BSD and GNU basename option-parse a dash-leading
+# operand ("illegal option -- z" on darwin; -z is GNU's NUL-delimiter flag),
+# so this stub reproduces the PR 11 upstream-merge regression on every
+# platform, not just darwin.
+write_dash_comm_ps_stub() {
+  local fakebin=$1
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+field= pid=
+while [ $# -gt 0 ]; do
+  case $1 in
+    -o) field=$2; shift 2 ;;
+    -p) pid=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$field" in
+  comm=*)
+    if [ "$pid" = "${FM_TEST_HARNESS_PID:-}" ]; then printf '%s\n' 'claude'; else printf -- '%s\n' '-zsh'; fi
+    ;;
+  ppid=*)
+    if [ "$pid" = "${FM_TEST_HARNESS_PID:-}" ]; then printf '%s\n' '1'; else printf '%s\n' "${FM_TEST_HARNESS_PID:-1}"; fi
+    ;;
+  args=*) printf -- '%s\n' '-zsh' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+}
+
+test_session_lock_lib_resolves_past_dash_leading_login_shell_comm() {
+  local fakebin out err status
+  fakebin=$(fm_fakebin "$TMP_ROOT/dashcomm")
+  write_dash_comm_ps_stub "$fakebin"
+  PATH="$fakebin:$PATH" FM_TEST_HARNESS_PID=424242 bash -c '
+    . "$1/bin/fm-session-lock-lib.sh"
+    fm_harness_ancestry_pid
+  ' _ "$ROOT" > "$TMP_ROOT/dashcomm.out" 2> "$TMP_ROOT/dashcomm.err" || status=$?
+  status=${status:-0}
+  out=$(cat "$TMP_ROOT/dashcomm.out")
+  err=$(cat "$TMP_ROOT/dashcomm.err")
+  expect_code 0 "$status" "ancestry walk must resolve the harness pid past a dash-leading login-shell comm"
+  [ "$out" = 424242 ] || fail "ancestry walk resolved to '$out', expected 424242"
+  [ -z "$err" ] || fail "ancestry walk polluted stderr past a -zsh comm (basename option-parse regression): $err"
+  pass "session-lock lib: ancestry resolves the harness past a -zsh login-shell comm with silent stderr"
+}
+
+test_session_lock_lib_liveness_check_tolerates_dash_leading_comm() {
+  local fakebin err status pos_status
+  fakebin=$(fm_fakebin "$TMP_ROOT/dashcomm-alive")
+  write_dash_comm_ps_stub "$fakebin"
+  PATH="$fakebin:$PATH" bash -c '
+    . "$1/bin/fm-session-lock-lib.sh"
+    FM_TEST_HARNESS_PID=424242 fm_harness_pid_alive $$
+  ' _ "$ROOT" 2> "$TMP_ROOT/dashcomm-alive.err" || status=$?
+  status=${status:-0}
+  err=$(cat "$TMP_ROOT/dashcomm-alive.err")
+  expect_code 1 "$status" "a -zsh login-shell pid is not a harness and must fail liveness"
+  [ -z "$err" ] || fail "liveness check polluted stderr on a -zsh comm (basename option-parse regression): $err"
+  PATH="$fakebin:$PATH" bash -c '
+    . "$1/bin/fm-session-lock-lib.sh"
+    FM_TEST_HARNESS_PID=$$ fm_harness_pid_alive $$
+  ' _ "$ROOT" 2> "$TMP_ROOT/dashcomm-alive-pos.err" || pos_status=$?
+  pos_status=${pos_status:-0}
+  err=$(cat "$TMP_ROOT/dashcomm-alive-pos.err")
+  expect_code 0 "$pos_status" "a claude-comm pid must pass liveness"
+  [ -z "$err" ] || fail "liveness check polluted stderr on a claude comm: $err"
+  pass "session-lock lib: liveness check tolerates a -zsh comm with silent stderr"
+}
+
 test_settings_registers_autoarm_with_multi_hour_timeout
 test_inert_in_child_worktree
 test_inert_without_session_lock
@@ -456,3 +530,5 @@ test_need_vanished_mid_cycle_closes_quietly
 test_afk_mid_cycle_suppresses_rewake
 test_active_in_marked_secondmate_home
 test_fm_lock_status_still_works_with_shared_lib
+test_session_lock_lib_resolves_past_dash_leading_login_shell_comm
+test_session_lock_lib_liveness_check_tolerates_dash_leading_comm
