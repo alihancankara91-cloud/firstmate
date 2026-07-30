@@ -10,3 +10,4 @@
 - Process ownership evidence should be snapshotted once per candidate before comparing it with live task records.
 - Relative path normalization must propagate through override variables when sourced scripts derive their own globals from those overrides.
 - Authenticated durable artifacts require producers and byte-validating consumers to canonicalize path inputs identically.
+- Canonicalize an override before deriving compatibility defaults that inherit its path.

@@ -706,22 +706,24 @@ test_bootstrap_relative_paths_write_absolute_poll_shim() {
   root="$TMP_ROOT/boot-relative-home"
   bootstrap_cwd="$root/bootstrap-cwd"
   watcher_cwd="$root/watcher-cwd"
-  mkdir -p "$root/home" "$root/cdpath/home" "$bootstrap_cwd" "$watcher_cwd"
-  ln -s "$ROOT" "$bootstrap_cwd/relative-root"
-  ln -s "$ROOT" "$watcher_cwd/relative-root"
-  home=$(cd "$root/home" && pwd -P)
+  home="$root/runtime-root"
+  mkdir -p "$home" "$root/cdpath/relative-root" "$bootstrap_cwd" "$watcher_cwd"
+  ln -s "$ROOT/bin" "$home/bin"
+  ln -s "$home" "$bootstrap_cwd/relative-root"
+  ln -s "$home" "$watcher_cwd/relative-root"
+  home=$(cd "$home" && pwd -P)
   fakebin=$(make_fake_curl "$root")
   printf 'FMX_PAIRING_TOKEN=tok-relative\n' > "$home/.env"
   out=$(
     cd "$bootstrap_cwd" || exit 1
-    CDPATH="$root/cdpath" PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE=relative-root \
+    env -u FM_HOME CDPATH="$root/cdpath" PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE=relative-root \
       "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null
   )
   assert_contains "$out" "FMX: X mode on" "relative-home bootstrap must announce X mode"
   quoted_home=$(printf '%q' "$home")
   assert_grep "export FM_HOME=$quoted_home" "$home/state/x-watch.check.sh" \
     "relative FM_HOME leaked into the durable X-mode poll shim"
-  quoted_root=$(printf '%q' "$ROOT")
+  quoted_root=$(printf '%q' "$home")
   assert_grep "exec $quoted_root/bin/fm-x-poll.sh" "$home/state/x-watch.check.sh" \
     "relative FM_ROOT leaked into the durable X-mode poll shim"
   body='{"request_id":"req-relative-root","text":"status?"}'
@@ -731,7 +733,7 @@ test_bootstrap_relative_paths_write_absolute_poll_shim() {
   (
     cd "$watcher_cwd" || exit 1
     perl -e 'my $pid=fork; die unless defined $pid; if (!$pid) { exec @ARGV } local $SIG{ALRM}=sub { kill "TERM", $pid; waitpid $pid, 0; exit 124 }; alarm 10; waitpid $pid, 0; alarm 0; exit($? >> 8)' \
-      env CDPATH="$root/cdpath" PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE=relative-root \
+      env -u FM_HOME CDPATH="$root/cdpath" PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE=relative-root \
         FMX_RELAY_URL=https://relay.test FAKE_CURL_LOG="$log" FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
         FM_CHECK_INTERVAL=0 FM_CHECK_TIMEOUT=1 FM_POLL=0.02 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=0 \
         "$ROOT/bin/fm-watch.sh"
@@ -742,11 +744,11 @@ test_bootstrap_relative_paths_write_absolute_poll_shim() {
     "watcher rejected or skipped the bootstrap-authenticated X shim"
   assert_no_grep "rejected unauthenticated state checks" "$watcher_out" \
     "watcher rejected the normalized bootstrap X shim"
-  assert_grep "root=$ROOT" "$log" \
+  assert_grep "root=$home" "$log" \
     "fm-x-poll did not inherit the normalized absolute root"
   assert_present "$home/state/x-inbox/req-relative-root.json" \
     "watcher did not dispatch the trusted X poll"
-  pass "bootstrap and watcher normalize relative roots identically across different working directories"
+  pass "bootstrap and watcher preserve the unset-home fallback across different working directories"
 }
 
 test_bootstrap_reports_missing_x_dependency() {

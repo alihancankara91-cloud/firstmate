@@ -88,3 +88,11 @@
 - [x] Normalize root ownership at all three consumer entry points.
 - [x] Add bootstrap-to-watcher behavioral coverage.
 - [x] Run one focused verification.
+
+# Relative X fallback-home review
+
+- [x] Reproduce absolute root with a relative fallback home and state.
+- [x] Identify initialization order as the shared consumer defect.
+- [x] Derive fallback homes only after root normalization.
+- [x] Exercise the unset-home bootstrap-to-watcher path.
+- [x] Run one focused verification.
