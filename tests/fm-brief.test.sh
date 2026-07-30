@@ -447,6 +447,23 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   mkdir -p "$home/data" "$home/state" "$data_override" "$state_override" \
     "$root/cdpath/home/data" "$root/cdpath/home/state" \
     "$root/cdpath/data-override" "$root/cdpath/state-override"
+  ln -s "$ROOT" "$root/relative-root"
+
+  brief="$home/data/relative-root/brief.md"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" relative-root example --scout >/dev/null 2>&1
+  baseline="$root/absolute-root-brief"
+  cp "$brief" "$baseline"
+  rm -f "$brief"
+  (
+    cd "$root" || exit 1
+    CDPATH="$root/cdpath" FM_HOME="$home" FM_ROOT_OVERRIDE=relative-root \
+      "$ROOT/bin/fm-brief.sh" relative-root example --scout >/dev/null 2>&1
+  )
+  cmp -s "$baseline" "$brief" \
+    || fail "relative FM_ROOT changed brief bytes compared with the same absolute root"
+  assert_grep "$ROOT/.agents/skills/decision-hold-lifecycle/SKILL.md" "$brief" \
+    "relative FM_ROOT did not render an absolute durable skill path"
 
   brief="$home/data/relative-home/brief.md"
   FM_HOME="$home" FM_SECONDMATE_CHARTER=x \
@@ -524,7 +541,16 @@ test_secondmate_directory_paths_are_absolute_and_output_is_stable() {
   assert_grep "FM_DATA_OVERRIDE directory cannot be resolved: missing-data" "$err" \
     "unresolved relative FM_DATA_OVERRIDE did not fail loudly"
 
-  pass "fm-brief.sh: relative directory inputs ignore CDPATH, render stable absolute charter paths, or fail loudly"
+  (
+    cd "$root" || exit 1
+    FM_HOME="$home" FM_ROOT_OVERRIDE=missing-root \
+      "$ROOT/bin/fm-brief.sh" unresolved-root example --scout >/dev/null 2>"$err"
+  ); status=$?
+  expect_code 1 "$status" "an unresolved relative FM_ROOT must fail"
+  assert_grep "FM_ROOT directory cannot be resolved: missing-root" "$err" \
+    "unresolved relative FM_ROOT did not fail loudly"
+
+  pass "fm-brief.sh: relative directory inputs ignore CDPATH, render stable absolute paths, or fail loudly"
 }
 
 test_herdr_lab_contract_applies_to_scouts_but_not_secondmates() {

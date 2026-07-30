@@ -74,17 +74,18 @@ unit_relative_paths_are_absolute_before_daemon_launch() {
   local root home state out status linked_home
   root=$(mktemp -d "${TMPDIR:-/tmp}/fm-afk-relative-home.XXXXXX")
   mkdir -p "$root/home/state" "$root/cdpath/home/state"
+  ln -s "$ROOT" "$root/relative-root"
   home=$(cd "$root/home" && pwd -P)
   state="$home/state"
   out=$(
     cd "$root" || exit 1
-    CDPATH="$root/cdpath" FM_HOME=home FM_STATE_OVERRIDE=home/state \
-      bash -c '. "$1"; printf "%s\n%s\n" "$FM_HOME" "$FM_AFK_LAUNCH_STATE"' _ "$LAUNCH"
+    CDPATH="$root/cdpath" FM_ROOT_OVERRIDE=relative-root FM_HOME=home FM_STATE_OVERRIDE=home/state \
+      bash -c '. "$1"; printf "%s\n%s\n%s\n%s\n" "$FM_ROOT" "$FM_HOME" "$FM_AFK_LAUNCH_STATE" "$(fm_afk_launch_entry_cmd)"' _ "$LAUNCH"
   )
-  if [ "$out" = "$home"$'\n'"$state" ]; then
-    pass "launcher paths: relative home and state ignore CDPATH before daemon command construction"
+  if [ "$out" = "$ROOT"$'\n'"$home"$'\n'"$state"$'\n'"$ROOT/bin/fm-afk-start.sh" ]; then
+    pass "launcher paths: relative root, home, and state ignore CDPATH before daemon command construction"
   else
-    fail "launcher paths: relative home or state remained cwd-dependent ($out)"
+    fail "launcher paths: relative root, home, or state remained cwd-dependent ($out)"
   fi
   linked_home="$root/home-link"
   ln -s "$root/home" "$linked_home"
@@ -114,6 +115,16 @@ unit_relative_paths_are_absolute_before_daemon_launch() {
     pass "launcher paths: unresolved relative FM_STATE_OVERRIDE fails loudly"
   else
     fail "launcher paths: unresolved relative FM_STATE_OVERRIDE did not name the bad input ($out)"
+  fi
+  out=$(
+    cd "$root" || exit 1
+    FM_HOME=home FM_ROOT_OVERRIDE=missing-root "$LAUNCH" help 2>&1
+  )
+  status=$?
+  if [ "$status" -ne 0 ] && printf '%s\n' "$out" | grep -F "FM_ROOT directory cannot be resolved: missing-root" >/dev/null; then
+    pass "launcher paths: unresolved relative FM_ROOT fails loudly"
+  else
+    fail "launcher paths: unresolved relative FM_ROOT did not name the bad input ($out)"
   fi
   rm -rf "$root"
 }

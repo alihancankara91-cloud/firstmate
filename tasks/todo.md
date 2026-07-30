@@ -72,3 +72,11 @@
 - [x] Remove the duplicate base metadata inventory from `AGENTS.md`.
 - [x] Document conservative live-task and unattributed-browser retention.
 - [x] Re-read the updated documentation and run documentation checks.
+
+# Relative durable root review
+
+- [x] Reproduce the cwd-dependent durable handoffs.
+- [x] Compare the failing and absolute-root paths.
+- [x] Normalize relative roots at all three changed handoff boundaries.
+- [x] Add behavioral regression coverage.
+- [x] Run one focused verification.

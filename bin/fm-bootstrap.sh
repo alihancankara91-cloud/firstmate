@@ -620,7 +620,7 @@ x_mode_remove_artifact() {
 # applying a cadence transition to a running watcher is the caller's job via
 # the emitted harness-aware supervision repair instruction.
 x_mode_setup() {
-  local env_file token shim cadence shim_body cadence_body tool missing shim_home
+  local env_file token shim cadence shim_body cadence_body tool missing shim_home shim_root
   env_file="$FM_HOME/.env"
   shim="$STATE/x-watch.check.sh"
   cadence="$CONFIG/x-mode.env"
@@ -690,9 +690,16 @@ x_mode_setup() {
         || { fmx_arm_failed; return 0; }
       ;;
   esac
-  shim_body=$(fmx_poll_shim_content "$shim_home" "$FM_ROOT")
+  case "$FM_ROOT" in
+    /*) shim_root=$FM_ROOT ;;
+    *)
+      shim_root=$(CDPATH='' cd -- "$FM_ROOT" 2>/dev/null && pwd -P) \
+        || { fmx_arm_failed; return 0; }
+      ;;
+  esac
+  shim_body=$(fmx_poll_shim_content "$shim_home" "$shim_root")
   x_mode_write_if_changed "$shim" "$shim_body" 700 || { fmx_arm_failed; return 0; }
-  fmx_poll_shim_valid "$shim" "$shim_home" "$FM_ROOT" \
+  fmx_poll_shim_valid "$shim" "$shim_home" "$shim_root" \
     || { fmx_arm_failed; return 0; }
 
   cadence_body=$(cat <<'EOF'

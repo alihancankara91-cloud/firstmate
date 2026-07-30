@@ -48,6 +48,19 @@ set -u
 FM_AFK_LAUNCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$FM_AFK_LAUNCH_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+case "$FM_ROOT" in
+  /*) ;;
+  *)
+    FM_AFK_LAUNCH_ROOT_INPUT=$FM_ROOT
+    FM_ROOT=$(CDPATH='' cd -- "$FM_AFK_LAUNCH_ROOT_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_ROOT directory cannot be resolved: $FM_AFK_LAUNCH_ROOT_INPUT" >&2
+      exit 1
+    }
+    ;;
+esac
+if [ -n "${FM_ROOT_OVERRIDE:-}" ]; then
+  FM_ROOT_OVERRIDE=$FM_ROOT
+fi
 case "$FM_HOME" in
   /*) ;;
   *)
