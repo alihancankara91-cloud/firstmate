@@ -43,3 +43,7 @@
 - Normalize an override variable itself before sourcing another entry script that derives globals from that override, or the source can undo the caller's normalized value.
 - Bound direct watcher reproductions because the local browser-reaper stall can mask a later check-path result.
 - Capture the repository root before changing into a path-isolation fixture.
+- Keep `functions.exec` orchestration source syntactically simple; nested template literals inside object arguments can fail before any test command starts.
+- The retained Pi watcher suite can fail specifically at the session-transition generation-owner case after earlier scenarios pass; isolate its child-process exit and runtime assumptions before retrying the whole file.
+- Avoid `status` as a zsh script variable because it is read-only; use a task-specific result name in test loops.
+- Avoid `path` as a zsh loop variable because it overwrites zsh's command-search path array and makes later commands unavailable.
