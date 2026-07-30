@@ -12,6 +12,19 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+case "$FM_ROOT" in
+  /*) ;;
+  *)
+    FM_PR_MIGRATE_ROOT_INPUT=$FM_ROOT
+    FM_ROOT=$(CDPATH='' cd -- "$FM_PR_MIGRATE_ROOT_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_ROOT directory cannot be resolved: $FM_PR_MIGRATE_ROOT_INPUT" >&2
+      exit 1
+    }
+    ;;
+esac
+if [ -n "${FM_ROOT_OVERRIDE:-}" ]; then
+  FM_ROOT_OVERRIDE=$FM_ROOT
+fi
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 TEMPLATE="$SCRIPT_DIR/fm-pr-poll.sh"
 LOG="$STATE/.pr-check-migration.log"

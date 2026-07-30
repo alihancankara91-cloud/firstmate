@@ -80,3 +80,11 @@
 - [x] Normalize relative roots at all three changed handoff boundaries.
 - [x] Add behavioral regression coverage.
 - [x] Run one focused verification.
+
+# Relative X consumer root review
+
+- [x] Trace bootstrap output through migration, watcher validation, and poll dispatch.
+- [x] Confirm the authenticated shim is quarantined by an unnormalized consumer.
+- [x] Normalize root ownership at all three consumer entry points.
+- [x] Add bootstrap-to-watcher behavioral coverage.
+- [x] Run one focused verification.
