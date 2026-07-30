@@ -84,10 +84,44 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+case "$FM_ROOT" in
+  /*) ;;
+  *)
+    FM_BOOTSTRAP_ROOT_INPUT=$FM_ROOT
+    FM_ROOT=$(CDPATH='' cd -- "$FM_BOOTSTRAP_ROOT_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_ROOT directory cannot be resolved: $FM_BOOTSTRAP_ROOT_INPUT" >&2
+      exit 1
+    }
+    ;;
+esac
+if [ -n "${FM_ROOT_OVERRIDE:-}" ]; then
+  FM_ROOT_OVERRIDE=$FM_ROOT
+fi
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+case "$FM_HOME" in
+  /*) ;;
+  *)
+    FM_BOOTSTRAP_HOME_INPUT=$FM_HOME
+    FM_HOME=$(CDPATH='' cd -- "$FM_BOOTSTRAP_HOME_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_HOME directory cannot be resolved: $FM_BOOTSTRAP_HOME_INPUT" >&2
+      exit 1
+    }
+    ;;
+esac
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+case "$STATE" in
+  /*) ;;
+  *)
+    FM_BOOTSTRAP_STATE_INPUT=$STATE
+    STATE=$(CDPATH='' cd -- "$FM_BOOTSTRAP_STATE_INPUT" 2>/dev/null && pwd -P) || {
+      echo "error: FM_STATE_OVERRIDE directory cannot be resolved: $FM_BOOTSTRAP_STATE_INPUT" >&2
+      exit 1
+    }
+    FM_STATE_OVERRIDE=$STATE
+    ;;
+esac
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-tasks-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
@@ -620,7 +654,7 @@ x_mode_remove_artifact() {
 # applying a cadence transition to a running watcher is the caller's job via
 # the emitted harness-aware supervision repair instruction.
 x_mode_setup() {
-  local env_file token shim cadence shim_body cadence_body tool missing
+  local env_file token shim cadence shim_body cadence_body tool missing shim_home shim_root
   env_file="$FM_HOME/.env"
   shim="$STATE/x-watch.check.sh"
   cadence="$CONFIG/x-mode.env"
@@ -683,9 +717,23 @@ x_mode_setup() {
 
   mkdir -p "$STATE" "$CONFIG" 2>/dev/null || { fmx_arm_failed; return 0; }
 
-  shim_body=$(fmx_poll_shim_content "$FM_HOME" "$FM_ROOT")
+  case "$FM_HOME" in
+    /*) shim_home=$FM_HOME ;;
+    *)
+      shim_home=$(CDPATH='' cd -- "$FM_HOME" 2>/dev/null && pwd -P) \
+        || { fmx_arm_failed; return 0; }
+      ;;
+  esac
+  case "$FM_ROOT" in
+    /*) shim_root=$FM_ROOT ;;
+    *)
+      shim_root=$(CDPATH='' cd -- "$FM_ROOT" 2>/dev/null && pwd -P) \
+        || { fmx_arm_failed; return 0; }
+      ;;
+  esac
+  shim_body=$(fmx_poll_shim_content "$shim_home" "$shim_root")
   x_mode_write_if_changed "$shim" "$shim_body" 700 || { fmx_arm_failed; return 0; }
-  fmx_poll_shim_valid "$shim" "$FM_HOME" "$FM_ROOT" \
+  fmx_poll_shim_valid "$shim" "$shim_home" "$shim_root" \
     || { fmx_arm_failed; return 0; }
 
   cadence_body=$(cat <<'EOF'

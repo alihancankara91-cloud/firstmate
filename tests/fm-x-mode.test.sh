@@ -60,7 +60,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 if [ -n "${FAKE_CURL_LOG:-}" ]; then
-  { echo "argv=$argv"; echo "method=$method"; echo "url=$url"; echo "auth=$auth"; echo "data=$data"; } >> "$FAKE_CURL_LOG"
+  { echo "argv=$argv"; echo "method=$method"; echo "url=$url"; echo "auth=$auth"; echo "data=$data"; echo "root=${FM_ROOT_OVERRIDE:-}"; } >> "$FAKE_CURL_LOG"
 fi
 case "$url" in
   */connector/poll)
@@ -698,6 +698,98 @@ test_bootstrap_activates_on_env_token() {
   n=$(find "$home/state" -maxdepth 1 -name 'x-watch*' | wc -l | tr -d ' ')
   [ "$n" = "1" ] || fail "bootstrap must not duplicate the shim (found $n)"
   pass "bootstrap activates X mode from an .env token, idempotently"
+}
+
+test_bootstrap_relative_paths_write_absolute_poll_shim() {
+  local root bootstrap_cwd watcher_cwd home state_override fakebin out quoted_home quoted_root
+  local body log watcher_out watcher_err rc explicit_body explicit_log
+  local explicit_watcher_out explicit_watcher_err
+  root="$TMP_ROOT/boot-relative-home"
+  bootstrap_cwd="$root/bootstrap-cwd"
+  watcher_cwd="$root/watcher-cwd"
+  home="$root/runtime-root"
+  state_override="$home/alternate-state"
+  mkdir -p "$home" "$state_override" "$root/cdpath/relative-root" "$bootstrap_cwd" "$watcher_cwd"
+  ln -s "$ROOT/bin" "$home/bin"
+  ln -s "$home" "$bootstrap_cwd/relative-root"
+  ln -s "$home" "$watcher_cwd/relative-root"
+  ln -s "$state_override" "$bootstrap_cwd/relative-state"
+  ln -s "$state_override" "$watcher_cwd/relative-state"
+  home=$(cd "$home" && pwd -P)
+  state_override=$(cd "$state_override" && pwd -P)
+  fakebin=$(make_fake_curl "$root")
+  printf 'FMX_PAIRING_TOKEN=tok-relative\n' > "$home/.env"
+  out=$(
+    cd "$bootstrap_cwd" || exit 1
+    env -u FM_HOME CDPATH="$root/cdpath" PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE=relative-root \
+      "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null
+  )
+  assert_contains "$out" "FMX: X mode on" "relative-home bootstrap must announce X mode"
+  quoted_home=$(printf '%q' "$home")
+  assert_grep "export FM_HOME=$quoted_home" "$home/state/x-watch.check.sh" \
+    "relative FM_HOME leaked into the durable X-mode poll shim"
+  quoted_root=$(printf '%q' "$home")
+  assert_grep "exec $quoted_root/bin/fm-x-poll.sh" "$home/state/x-watch.check.sh" \
+    "relative FM_ROOT leaked into the durable X-mode poll shim"
+  body='{"request_id":"req-relative-root","text":"status?"}'
+  log="$root/curl.log"
+  watcher_out="$root/watcher.out"
+  watcher_err="$root/watcher.err"
+  (
+    cd "$watcher_cwd" || exit 1
+    perl -e 'my $pid=fork; die unless defined $pid; if (!$pid) { exec @ARGV } local $SIG{ALRM}=sub { kill "TERM", $pid; waitpid $pid, 0; exit 124 }; alarm 10; waitpid $pid, 0; alarm 0; exit($? >> 8)' \
+      env -u FM_HOME CDPATH="$root/cdpath" PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE=relative-root \
+        FMX_RELAY_URL=https://relay.test FAKE_CURL_LOG="$log" FAKE_POLL_CODE=200 FAKE_POLL_BODY="$body" \
+        FM_CHECK_INTERVAL=0 FM_CHECK_TIMEOUT=1 FM_POLL=0.02 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=0 \
+        "$ROOT/bin/fm-watch.sh"
+  ) > "$watcher_out" 2> "$watcher_err"
+  rc=$?
+  expect_code 0 "$rc" "relative-root watcher handoff"
+  assert_grep "check: $home/state/x-watch.check.sh: x-mention req-relative-root" "$watcher_out" \
+    "watcher rejected or skipped the bootstrap-authenticated X shim"
+  assert_no_grep "rejected unauthenticated state checks" "$watcher_out" \
+    "watcher rejected the normalized bootstrap X shim"
+  assert_grep "root=$home" "$log" \
+    "fm-x-poll did not inherit the normalized absolute root"
+  assert_present "$home/state/x-inbox/req-relative-root.json" \
+    "watcher did not dispatch the trusted X poll"
+  pass "bootstrap and watcher preserve the unset-home fallback across different working directories"
+
+  out=$(
+    cd "$bootstrap_cwd" || exit 1
+    CDPATH="$root/cdpath" PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE=relative-root \
+      FM_HOME=relative-root FM_STATE_OVERRIDE=relative-state \
+      "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null
+  )
+  assert_contains "$out" "FMX: X mode on" "explicit-relative-home bootstrap must announce X mode"
+  assert_grep "export FM_HOME=$quoted_home" "$state_override/x-watch.check.sh" \
+    "explicit relative FM_HOME leaked into the durable X-mode poll shim"
+  assert_grep "exec $quoted_root/bin/fm-x-poll.sh" "$state_override/x-watch.check.sh" \
+    "explicit relative FM_ROOT leaked into the durable X-mode poll shim"
+  explicit_body='{"request_id":"req-explicit-relative","text":"status?"}'
+  explicit_log="$root/explicit-curl.log"
+  explicit_watcher_out="$root/explicit-watcher.out"
+  explicit_watcher_err="$root/explicit-watcher.err"
+  (
+    cd "$watcher_cwd" || exit 1
+    perl -e 'my $pid=fork; die unless defined $pid; if (!$pid) { exec @ARGV } local $SIG{ALRM}=sub { kill "TERM", $pid; waitpid $pid, 0; exit 124 }; alarm 10; waitpid $pid, 0; alarm 0; exit($? >> 8)' \
+      env CDPATH="$root/cdpath" PATH="$fakebin:$BASE_PATH" FM_ROOT_OVERRIDE=relative-root \
+        FM_HOME=relative-root FM_STATE_OVERRIDE=relative-state \
+        FMX_RELAY_URL=https://relay.test FAKE_CURL_LOG="$explicit_log" FAKE_POLL_CODE=200 FAKE_POLL_BODY="$explicit_body" \
+        FM_CHECK_INTERVAL=0 FM_CHECK_TIMEOUT=1 FM_POLL=0.02 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=0 \
+        "$ROOT/bin/fm-watch.sh"
+  ) > "$explicit_watcher_out" 2> "$explicit_watcher_err"
+  rc=$?
+  expect_code 0 "$rc" "explicit-relative-home watcher handoff"
+  assert_grep "check: $state_override/x-watch.check.sh: x-mention req-explicit-relative" "$explicit_watcher_out" \
+    "watcher rejected or skipped the explicit-relative-home X shim"
+  assert_no_grep "rejected unauthenticated state checks" "$explicit_watcher_out" \
+    "watcher rejected the explicit-relative-home X shim"
+  assert_grep "root=$home" "$explicit_log" \
+    "fm-x-poll did not inherit the explicit normalized root"
+  assert_present "$state_override/x-inbox/req-explicit-relative.json" \
+    "fm-x-poll did not inherit the explicit normalized state override"
+  pass "bootstrap and watcher normalize explicit relative home and state paths"
 }
 
 test_bootstrap_reports_missing_x_dependency() {
@@ -2862,6 +2954,7 @@ test_followup_post_dry_run_increments_counter_keeps_link
 test_followup_post_dry_run_final_clears_link
 test_followup_usage_errors
 test_bootstrap_activates_on_env_token
+test_bootstrap_relative_paths_write_absolute_poll_shim
 test_bootstrap_reports_missing_x_dependency
 test_bootstrap_does_not_announce_when_arm_fails
 test_bootstrap_does_not_follow_x_artifact_symlinks

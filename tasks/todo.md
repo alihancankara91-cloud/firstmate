@@ -72,3 +72,35 @@
 - [x] Remove the duplicate base metadata inventory from `AGENTS.md`.
 - [x] Document conservative live-task and unattributed-browser retention.
 - [x] Re-read the updated documentation and run documentation checks.
+
+# Relative durable root review
+
+- [x] Reproduce the cwd-dependent durable handoffs.
+- [x] Compare the failing and absolute-root paths.
+- [x] Normalize relative roots at all three changed handoff boundaries.
+- [x] Add behavioral regression coverage.
+- [x] Run one focused verification.
+
+# Relative X consumer root review
+
+- [x] Trace bootstrap output through migration, watcher validation, and poll dispatch.
+- [x] Confirm the authenticated shim is quarantined by an unnormalized consumer.
+- [x] Normalize root ownership at all three consumer entry points.
+- [x] Add bootstrap-to-watcher behavioral coverage.
+- [x] Run one focused verification.
+
+# Relative X fallback-home review
+
+- [x] Reproduce absolute root with a relative fallback home and state.
+- [x] Identify initialization order as the shared consumer defect.
+- [x] Derive fallback homes only after root normalization.
+- [x] Exercise the unset-home bootstrap-to-watcher path.
+- [x] Run one focused verification.
+
+# Relative X explicit-home review
+
+- [x] Reproduce explicit relative home and state shim rejection.
+- [x] Audit producer and consumer durable path initialization.
+- [x] Canonicalize relative root, home, and state inputs consistently.
+- [x] Exercise explicit relative home and state handoffs.
+- [x] Run one focused verification.
