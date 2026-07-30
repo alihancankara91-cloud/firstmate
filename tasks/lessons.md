@@ -8,3 +8,4 @@
 - Shared GUI runtimes need one global inventory authority for migration, live checks, and removal so window focus cannot change endpoint identity.
 - Browser attribution namespaces must scope the entire task temp root by Firstmate home, not only the Puppeteer child directory.
 - Process ownership evidence should be snapshotted once per candidate before comparing it with live task records.
+- For shell `printf`, an option terminator must precede the format string or it becomes output data.

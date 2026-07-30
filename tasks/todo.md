@@ -72,3 +72,9 @@
 - [x] Remove the duplicate base metadata inventory from `AGENTS.md`.
 - [x] Document conservative live-task and unattributed-browser retention.
 - [x] Re-read the updated documentation and run documentation checks.
+
+# Dash-leading comm review fix
+
+- [x] Validate the reported stub output against the intended macOS `ps` shape.
+- [x] Correct both dash-leading `printf` invocations.
+- [x] Run the focused Stop-hook autoarm regression script.

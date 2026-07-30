@@ -460,12 +460,12 @@ while [ $# -gt 0 ]; do
 done
 case "$field" in
   comm=*)
-    if [ "$pid" = "${FM_TEST_HARNESS_PID:-}" ]; then printf '%s\n' 'claude'; else printf '%s\n' -- '-zsh'; fi
+    if [ "$pid" = "${FM_TEST_HARNESS_PID:-}" ]; then printf '%s\n' 'claude'; else printf -- '%s\n' '-zsh'; fi
     ;;
   ppid=*)
     if [ "$pid" = "${FM_TEST_HARNESS_PID:-}" ]; then printf '%s\n' '1'; else printf '%s\n' "${FM_TEST_HARNESS_PID:-1}"; fi
     ;;
-  args=*) printf '%s\n' -- '-zsh' ;;
+  args=*) printf -- '%s\n' '-zsh' ;;
   *) exit 1 ;;
 esac
 SH
