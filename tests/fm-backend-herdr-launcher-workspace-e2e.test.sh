@@ -185,6 +185,16 @@ mkdir -p "$PRIMARY_HOME/data/$SM2_ID"
 printf 'trivial secondmate charter brief: nothing to do.\n' > "$PRIMARY_HOME/data/$SM2_ID/brief.md"
 
 PROJ="$TMP_ROOT/scratch-project"; make_scratch_project "$PROJ"
+# Register the scratch project as local-only in every home that spawns against
+# it: it has no remote, so a PR-mode task could never clear the fork's delivery
+# gate at teardown (same binding as tests/fm-backend-herdr-workspace-per-home-e2e.test.sh).
+mkdir -p "$PRIMARY_HOME/data" "$SM_HOME/data" "$PRES_HOME/data"
+printf -- '- scratch-project [local-only] - herdr launcher-workspace e2e scratch\n' \
+  > "$PRIMARY_HOME/data/projects.md"
+printf -- '- scratch-project [local-only] - herdr launcher-workspace e2e scratch\n' \
+  > "$SM_HOME/data/projects.md"
+printf -- '- scratch-project [local-only] - herdr launcher-workspace e2e scratch\n' \
+  > "$PRES_HOME/data/projects.md"
 
 # One unrelated workspace, kept FOCUSED throughout, so every placement result
 # below is also evidence that the globally focused workspace is never the target.

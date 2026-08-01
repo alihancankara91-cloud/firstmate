@@ -2840,8 +2840,22 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
   fm_backend_herdr_explicit_close_pane_confirmed "$session" "$pane" || true
 }
 
-fm_backend_herdr_kill() {  # <target>
-  fm_backend_herdr_target_ready "$1" || return 0
+fm_backend_herdr_kill() {  # <target> [tab-id] [expected-label] [workspace-id]
+  # Optional binding args recheck owning workspace/tab/pane at mutation time
+  # (fork safety for kill_endpoint_verified callers). When absent, the plain
+  # target-ready path is enough for best-effort teardown.
+  local target=$1 tab=${2:-} expected_label=${3:-} workspace=${4:-} workspace_label
+  if [ -n "$expected_label" ]; then
+    fm_backend_herdr_parse_target "$target" || return 0
+    [ -n "$tab" ] && [ -n "$workspace" ] || return 0
+    workspace_label=$(fm_backend_herdr_workspace_label)
+    fm_backend_herdr_workspace_binding_matches \
+      "$FM_BACKEND_HERDR_SESSION" "$workspace" "$workspace_label" || return 0
+    fm_backend_herdr_task_binding_matches \
+      "$FM_BACKEND_HERDR_SESSION" "$workspace" "$tab" "$FM_BACKEND_HERDR_PANE" "$expected_label" || return 0
+  else
+    fm_backend_herdr_target_ready "$target" || return 0
+  fi
   local session=$FM_BACKEND_HERDR_SESSION pane=$FM_BACKEND_HERDR_PANE
   local lock_path attempt=0 lock_held=0
   if ! declare -F fm_lock_try_acquire >/dev/null 2>&1; then

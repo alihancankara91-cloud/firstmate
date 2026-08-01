@@ -2581,13 +2581,23 @@ test_kill_is_best_effort() {
 
 test_kill_rechecks_exact_task_binding() {
   local dir log resp fb
+  # Binding recheck runs before the lock-gated focus-safe close. Stub the lock
+  # and focus snapshot so the unit test isolates the binding gate, matching
+  # test_kill_is_best_effort's lock stubs for the new kill path.
   dir="$TMP_ROOT/kill-bound"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"}]}}\n' > "$resp/1.out"
   printf '{"result":{"tabs":[{"tab_id":"w1:t2","label":"fm-task-a"}]}}\n' > "$resp/2.out"
   printf '{"result":{"panes":[{"pane_id":"w1:p2","tab_id":"w1:t2"}]}}\n' > "$resp/3.out"
   fb=$(make_herdr_fakebin "$dir")
   PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_kill default:w1:p2 w1:t2 fm-task-a w1' "$ROOT"
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_presentation_session_lock_path() { printf "/tmp/fm-herdr-test-lock"; }
+      fm_lock_try_acquire() { return 0; }
+      fm_lock_release() { return 0; }
+      fm_backend_herdr_projection_focus_snapshot() { return 1; }
+      fm_backend_herdr_kill default:w1:p2 w1:t2 fm-task-a w1
+    ' "$ROOT"
   assert_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close'$'\x1f''w1:p2' \
     "bound kill did not close the exactly labeled pane"
 
@@ -2595,7 +2605,14 @@ test_kill_rechecks_exact_task_binding() {
   printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"other-home"}]}}\n' > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
   PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_kill default:w1:p2 w1:t2 fm-task-a w1' "$ROOT"
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_presentation_session_lock_path() { printf "/tmp/fm-herdr-test-lock"; }
+      fm_lock_try_acquire() { return 0; }
+      fm_lock_release() { return 0; }
+      fm_backend_herdr_projection_focus_snapshot() { return 1; }
+      fm_backend_herdr_kill default:w1:p2 w1:t2 fm-task-a w1
+    ' "$ROOT"
   assert_not_contains "$(cat "$log")" $'\x1f''pane'$'\x1f''close' \
     "label-swapped Herdr endpoint reached pane close"
   pass "fm_backend_herdr_kill: rechecks owning workspace, tab label, and pane binding at mutation time"
