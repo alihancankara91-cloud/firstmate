@@ -1637,9 +1637,20 @@ configure_secondmate_with_herdr_child() {  # <case-dir>
   local case_dir=$1 home="$1/secondmate-home"
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
   printf '%s\n' task-x1 > "$home/.fm-secondmate-home"
+  # Fork ownership (fm_backend_legacy_worktree_matches) requires a secondmate's
+  # worktree path to equal its marked home. Upstream fixtures only appended home=;
+  # rewrite both fields so parent ownership and child preflight can both run.
   printf '%s\n' "home=$home" >> "$case_dir/state/task-x1.meta"
-  fm_write_meta "$home/state/child-herdr.meta" \
-    "window=childsession:wC:p1" \
+  if grep -q '^worktree=' "$case_dir/state/task-x1.meta" 2>/dev/null; then
+    # Replace the project worktree write_meta recorded with the secondmate home.
+    local tmp="$case_dir/state/task-x1.meta.tmp"
+    grep -v '^worktree=' "$case_dir/state/task-x1.meta" > "$tmp"
+    printf '%s\n' "worktree=$home" >> "$tmp"
+    mv "$tmp" "$case_dir/state/task-x1.meta"
+  else
+    printf '%s\n' "worktree=$home" >> "$case_dir/state/task-x1.meta"
+  fi
+  fm_write_meta "$home/state/child-herdr.meta" \    "window=childsession:wC:p1" \
     "endpoint_task_id=child-herdr" \
     "worktree=$case_dir/wt" \
     "project=$case_dir/project" \
@@ -1735,16 +1746,22 @@ test_forced_secondmate_herdr_child_retains_records_when_close_unconfirmed() {
 }
 
 configure_nested_secondmate_with_herdr_grandchild() {  # <case-dir>
-  local case_dir=$1 home="$1/secondmate-home" nested_home="$1/secondmate-home/nested-home"
+  local case_dir=$1 home="$1/secondmate-home" nested_home="$1/secondmate-home/nested-home" tmp
   mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
   mkdir -p "$nested_home/state" "$nested_home/data" "$nested_home/config" "$nested_home/projects"
   printf '%s\n' task-x1 > "$home/.fm-secondmate-home"
   printf '%s\n' nested-sm > "$nested_home/.fm-secondmate-home"
   printf '%s\n' "home=$home" >> "$case_dir/state/task-x1.meta"
+  # Same fork ownership rule as configure_secondmate_with_herdr_child: secondmate
+  # worktree path must equal the marked home for parent and nested secondmates.
+  tmp="$case_dir/state/task-x1.meta.tmp"
+  grep -v '^worktree=' "$case_dir/state/task-x1.meta" > "$tmp"
+  printf '%s\n' "worktree=$home" >> "$tmp"
+  mv "$tmp" "$case_dir/state/task-x1.meta"
   fm_write_meta "$home/state/nested-sm.meta" \
     "window=firstmate:fm-nested-sm" \
     "endpoint_task_id=nested-sm" \
-    "worktree=$case_dir/wt" \
+    "worktree=$nested_home" \
     "project=$case_dir/project" \
     "kind=secondmate" \
     "mode=local-only" \
