@@ -30,6 +30,7 @@
 - Always invoke focused `tests/*.test.sh` files through Bash or `bin/fm-test-run.sh`, even when nearby tests run directly; executable bits are not guaranteed for every test file.
 - `gh-axi pr list --fields` exposes only the fields shown by its current help; omit unsupported GitHub CLI field names.
 - In isolated or conflict-resolution worktrees, treat `no-mistakes axi` reporting an uninitialized repository as a setup probe result and do not initialize the gate implicitly.
+- Manual fleet-CLI evidence inside a gate worktree must use the repository's documented `FM_GATE_REFUSE_BYPASS=1` test-fixture escape hatch, or the gate containment guard correctly refuses before the behavior under test.
 - Decision-hold completion applies only to investigations with task metadata owned by the active Firstmate home.
 - Put `rg` patterns containing Markdown backticks in single-quoted shell arguments so command construction cannot leave an unmatched double quote.
 - Verify a target document's exact generated Markdown anchor before adding a cross-reference.
@@ -44,6 +45,7 @@
 - Bound direct watcher reproductions because the local browser-reaper stall can mask a later check-path result.
 - Capture the repository root before changing into a path-isolation fixture.
 - Keep `functions.exec` orchestration source syntactically simple; nested template literals inside object arguments can fail before any test command starts.
+- When polling a long unified test session, keep each orchestration wrapper minimal because an otherwise identical `write_stdin` wrapper can fail parsing before it reaches the live session.
 - The retained Pi watcher suite can fail specifically at the session-transition generation-owner case after earlier scenarios pass; isolate its child-process exit and runtime assumptions before retrying the whole file.
 - Avoid `status` as a zsh script variable because it is read-only; use a task-specific result name in test loops.
 - Avoid `path` as a zsh loop variable because it overwrites zsh's command-search path array and makes later commands unavailable.
