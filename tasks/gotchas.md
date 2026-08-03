@@ -1,5 +1,9 @@
 # Gotchas
 
+- The changed-test selector currently has no mapping for `bin/fm-delivery-contract-lib.sh`; use its known consumers' tests when validating an isolated lint-only edit.
+- Resolve focused test filenames with `rg --files tests` before invoking a guessed contract-test path.
+- Portable serial shard lane names include both shard index and count, for example `portable-serial-4of4`.
+- Historical script fixtures must copy every library sourced by the materialized entry point, including dependencies added after the original conformance test was written.
 - A no-mistakes PR worktree may still lack worktree-local gate initialization, so inspect `doctor` before assuming the existing PR run is attachable.
 - Re-read the current task ledger before patching it because another crewmate may have already changed the expected context.
 - A focused portable failure can expose a stale synthetic assertion when a stronger fail-closed validation now rejects the fixture earlier.
@@ -30,6 +34,7 @@
 - Always invoke focused `tests/*.test.sh` files through Bash or `bin/fm-test-run.sh`, even when nearby tests run directly; executable bits are not guaranteed for every test file.
 - `gh-axi pr list --fields` exposes only the fields shown by its current help; omit unsupported GitHub CLI field names.
 - In isolated or conflict-resolution worktrees, treat `no-mistakes axi` reporting an uninitialized repository as a setup probe result and do not initialize the gate implicitly.
+- Manual fleet-CLI evidence inside a gate worktree must use the repository's documented `FM_GATE_REFUSE_BYPASS=1` test-fixture escape hatch, or the gate containment guard correctly refuses before the behavior under test.
 - Decision-hold completion applies only to investigations with task metadata owned by the active Firstmate home.
 - Put `rg` patterns containing Markdown backticks in single-quoted shell arguments so command construction cannot leave an unmatched double quote.
 - Verify a target document's exact generated Markdown anchor before adding a cross-reference.
@@ -44,6 +49,23 @@
 - Bound direct watcher reproductions because the local browser-reaper stall can mask a later check-path result.
 - Capture the repository root before changing into a path-isolation fixture.
 - Keep `functions.exec` orchestration source syntactically simple; nested template literals inside object arguments can fail before any test command starts.
+- When polling a long unified test session, keep each orchestration wrapper minimal because an otherwise identical `write_stdin` wrapper can fail parsing before it reaches the live session.
 - The retained Pi watcher suite can fail specifically at the session-transition generation-owner case after earlier scenarios pass; isolate its child-process exit and runtime assumptions before retrying the whole file.
 - Avoid `status` as a zsh script variable because it is read-only; use a task-specific result name in test loops.
 - Avoid `path` as a zsh loop variable because it overwrites zsh's command-search path array and makes later commands unavailable.
+- Upstream sync 2026-08-03 has intentional conflicts in supervision locks, spawn, watcher, turn-end guard, docs, and related tests; export all hunks and resolutions before finalizing the merge commit.
+- A line-based conflict selection on the turn-end regression test left the later call-list conflict untouched; always rerun marker scans and Bash syntax checks after each resolution.
+- The command-policy hook refused a combined syntax-check command that mentioned the protected watcher script; split protected supervision checks from ordinary marker and syntax checks.
+- The protected watcher also refuses `bash -n bin/fm-watch.sh` through a wrapper; use the repository's direct ShellCheck/lint path for watcher parsing instead of invoking it through Bash.
+- After selecting upstream's attended fail-open message, the retained fork-only `NEXT_DESC` assignment became unused and ShellCheck caught it; remove stale conflict-side variables instead of silencing the warning.
+- The focused merge test batch exceeded the 120-second command bound while fm-turnend-guard was still running; rerun long suites with an appropriate timeout and inspect the emitted test markers before treating a timeout as a test failure.
+- The full suite reached a Calm Pi export failure unrelated to the six upstream commits, while delivery-gate dependency fixtures needed explicit mode/yolo flags after upstream's contract change; isolate each failure before changing code.
+- The local tasks/ ledger is ignored operational state in this checkout; do not stage it in the merge commit, but keep the plan and lessons available to the supervising firstmate.
+- The second full `--all` run exceeded a 60-minute bound without returning a summary; inspect its saved log and use the runner's lane partitions to identify a slow or blocked lane instead of repeatedly rerunning the whole suite blindly.
+- Parallel portable serial shards exposed shared-environment failures and one timeout in PR-check, teardown, and bootstrap tests; lane sharding is not a substitute for serializing suites with external runtime dependencies, so treat those outcomes as environment evidence until reproduced in isolation.
+
+## 2026-08-03 - Patch exact generated test contexts
+
+- A multi-file review patch missed the Herdr launcher fixture because the target command carried an inline environment prefix.
+- Re-read exact target lines before applying a cross-file patch.
+- Search the entire focused test for old lifecycle assertions after changing a shared terminal-state invariant.

@@ -1,5 +1,7 @@
 # Lessons
 
+- Synthetic script roots are compatibility contracts: when an entry point gains an unconditional sibling dependency, every historical or isolated fixture must materialize that dependency too.
+- Lifecycle E2E fixtures must record a delivery mode consistent with the scratch project's registered posture so teardown tests cleanup rather than a deliberate delivery refusal.
 - Per-home E2E teardown fixtures must pass the same `FM_HOME` that owned the spawn so endpoint validation and cleanup exercise the real runtime context.
 - Cleanup schema hardening needs an explicit compatibility path for durable records written by earlier releases.
 - Legacy cleanup must authorize durable worktree removal and live endpoint closure independently, with authoritative absence distinct from unreadable or foreign state.
@@ -12,3 +14,7 @@
 - Authenticated durable artifacts require producers and byte-validating consumers to canonicalize path inputs identically.
 - Canonicalize an override before deriving compatibility defaults that inherit its path.
 - Canonicalize every durable path input before producing or validating path-bound bytes.
+- Upstream's explicit per-task delivery contract requires dependency-focused spawn fixtures to pass a concrete mode and yolo posture before they reach --requires validation.
+- Spawn batch tests must use an isolated config directory rather than an empty FM_CONFIG_OVERRIDE when the script uses fallback expansion for unset-like values.
+- Machine-wide terminal state needs a monotonic registration cutoff when homes keep separate registries.
+- Independent continuation obligations need independent counters and discharge paths.

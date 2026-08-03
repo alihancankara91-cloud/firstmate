@@ -64,6 +64,8 @@ make_fake_root() {
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
   ln -s "$ROOT/bin/fm-pr-lib.sh" "$fake/bin/fm-pr-lib.sh"
+  ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
+  ln -s "$ROOT/bin/fm-procevent-lib.sh" "$fake/bin/fm-procevent-lib.sh"
   # fm-delivery-lib.sh: teardown sources the delivery gate; the nonexistent
   # worktree keeps the gate itself skipped, exactly like the dirty/treehouse blocks.
   ln -s "$ROOT/bin/fm-delivery-lib.sh" "$fake/bin/fm-delivery-lib.sh"
@@ -140,6 +142,8 @@ test_teardown_skips_gracefully_without_tasktmp() {
   ln -s "$ROOT/bin/fm-gate-refuse-lib.sh" "$fake/bin/fm-gate-refuse-lib.sh"
   # fm-pr-lib.sh: teardown uses its canonical task-ID validator for poll cleanup.
   ln -s "$ROOT/bin/fm-pr-lib.sh" "$fake/bin/fm-pr-lib.sh"
+  ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
+  ln -s "$ROOT/bin/fm-procevent-lib.sh" "$fake/bin/fm-procevent-lib.sh"
   # fm-delivery-lib.sh: teardown sources the delivery gate; the nonexistent
   # worktree keeps the gate itself skipped, exactly like the dirty/treehouse blocks.
   ln -s "$ROOT/bin/fm-delivery-lib.sh" "$fake/bin/fm-delivery-lib.sh"

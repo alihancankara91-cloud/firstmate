@@ -1,5 +1,10 @@
 # CI behavior failure fixes
 
+- [x] Reproduce all four current CI check failures through their exact local entry points.
+- [x] Identify the earliest shared divergence in fixtures or runtime behavior.
+- [x] Apply the smallest cross-platform root-cause fix.
+- [x] Run the focused behavior and repository lint checks.
+
 - [x] Diagnose the portable secondmate teardown failure and the Herdr per-home teardown failure.
 - [x] Update the stale portable assertion and restore faithful per-home teardown context.
 - [x] Run focused portable and Herdr verification.
@@ -103,4 +108,30 @@
 - [x] Audit producer and consumer durable path initialization.
 - [x] Canonicalize relative root, home, and state inputs consistently.
 - [x] Exercise explicit relative home and state handoffs.
+
+# Upstream sync 2026-08-03
+
+- [ ] Fetch origin/main and upstream/main, confirm the six upstream commits.
+- [ ] Merge upstream/main with a real merge commit and reconcile conflicts without dropping fork adaptations.
+- [ ] Export conflict evidence, prove ancestry, and run the full local test suite plus focused lint.
+- [ ] Drive no-mistakes through green CI and open the required PR without merging it.
+- [x] Run one focused verification.
+
+# Upstream sync review fixes
+
+- [x] Validate the four reported findings against code, tests, and history.
+- [x] Separate Claude escalation enforcement from supervision recovery.
+- [x] Preserve cross-home terminal process-event generations.
+- [x] Emit complete mode-specific promotion contracts from one owner.
+- [x] Correct local-only Herdr teardown fixtures.
+- [x] Run one focused verification.
+
+# Upstream sync review fixes round 2
+
+- [x] Revalidate the five reported findings and their root causes.
+- [x] Separate escalation continuation accounting from auto-arm epochs.
+- [x] Preserve supervision recovery after escalation discharge.
+- [x] Share complete ship rules between briefs and promotions.
+- [x] Preserve legacy terminal registration compatibility.
+- [x] Align teardown with terminal-aware claim classification.
 - [x] Run one focused verification.
