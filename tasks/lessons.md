@@ -12,3 +12,5 @@
 - Authenticated durable artifacts require producers and byte-validating consumers to canonicalize path inputs identically.
 - Canonicalize an override before deriving compatibility defaults that inherit its path.
 - Canonicalize every durable path input before producing or validating path-bound bytes.
+- Upstream's explicit per-task delivery contract requires dependency-focused spawn fixtures to pass a concrete mode and yolo posture before they reach --requires validation.
+- Spawn batch tests must use an isolated config directory rather than an empty FM_CONFIG_OVERRIDE when the script uses fallback expansion for unset-like values.

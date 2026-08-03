@@ -190,7 +190,7 @@ run_spawn() {
   FM_CONFIG_OVERRIDE="$case_dir/config" \
   FM_PROJECTS_OVERRIDE="$case_dir/projects" \
   PATH="$case_dir/fakebin:$PATH" \
-    "$SPAWN" "$@"
+    "$SPAWN" "$@" --mode no-mistakes --yolo off
 }
 
 # --- historical failure 4: branch never pushed to the remote ----------------

@@ -103,4 +103,11 @@
 - [x] Audit producer and consumer durable path initialization.
 - [x] Canonicalize relative root, home, and state inputs consistently.
 - [x] Exercise explicit relative home and state handoffs.
+
+# Upstream sync 2026-08-03
+
+- [ ] Fetch origin/main and upstream/main, confirm the six upstream commits.
+- [ ] Merge upstream/main with a real merge commit and reconcile conflicts without dropping fork adaptations.
+- [ ] Export conflict evidence, prove ancestry, and run the full local test suite plus focused lint.
+- [ ] Drive no-mistakes through green CI and open the required PR without merging it.
 - [x] Run one focused verification.

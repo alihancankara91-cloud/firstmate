@@ -47,3 +47,13 @@
 - The retained Pi watcher suite can fail specifically at the session-transition generation-owner case after earlier scenarios pass; isolate its child-process exit and runtime assumptions before retrying the whole file.
 - Avoid `status` as a zsh script variable because it is read-only; use a task-specific result name in test loops.
 - Avoid `path` as a zsh loop variable because it overwrites zsh's command-search path array and makes later commands unavailable.
+- Upstream sync 2026-08-03 has intentional conflicts in supervision locks, spawn, watcher, turn-end guard, docs, and related tests; export all hunks and resolutions before finalizing the merge commit.
+- A line-based conflict selection on the turn-end regression test left the later call-list conflict untouched; always rerun marker scans and Bash syntax checks after each resolution.
+- The command-policy hook refused a combined syntax-check command that mentioned the protected watcher script; split protected supervision checks from ordinary marker and syntax checks.
+- The protected watcher also refuses `bash -n bin/fm-watch.sh` through a wrapper; use the repository's direct ShellCheck/lint path for watcher parsing instead of invoking it through Bash.
+- After selecting upstream's attended fail-open message, the retained fork-only `NEXT_DESC` assignment became unused and ShellCheck caught it; remove stale conflict-side variables instead of silencing the warning.
+- The focused merge test batch exceeded the 120-second command bound while fm-turnend-guard was still running; rerun long suites with an appropriate timeout and inspect the emitted test markers before treating a timeout as a test failure.
+- The full suite reached a Calm Pi export failure unrelated to the six upstream commits, while delivery-gate dependency fixtures needed explicit mode/yolo flags after upstream's contract change; isolate each failure before changing code.
+- The local tasks/ ledger is ignored operational state in this checkout; do not stage it in the merge commit, but keep the plan and lessons available to the supervising firstmate.
+- The second full `--all` run exceeded a 60-minute bound without returning a summary; inspect its saved log and use the runner's lane partitions to identify a slow or blocked lane instead of repeatedly rerunning the whole suite blindly.
+- Parallel portable serial shards exposed shared-environment failures and one timeout in PR-check, teardown, and bootstrap tests; lane sharding is not a substitute for serializing suites with external runtime dependencies, so treat those outcomes as environment evidence until reproduced in isolation.
