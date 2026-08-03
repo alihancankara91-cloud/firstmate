@@ -120,6 +120,10 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-procevent-lib.sh
+. "$SCRIPT_DIR/fm-procevent-lib.sh"
 # shellcheck source=bin/fm-delivery-lib.sh
 . "$SCRIPT_DIR/fm-delivery-lib.sh"
 # shellcheck source=bin/fm-public-followup-lib.sh
@@ -1148,7 +1152,7 @@ remove_firstmate_home() {
 }
 
 firstmate_home_has_process_events() {
-  local home=$1 path owner claim_root
+  local home=$1 path owner claim_root id
   for path in "$home/state/procevent"/*.source "$home/state/procevent"/*.runner; do
     if [ -e "$path" ] || [ -L "$path" ]; then
       return 0
@@ -1157,8 +1161,27 @@ firstmate_home_has_process_events() {
   claim_root=${FM_PROCEVENT_CLAIM_ROOT:-${XDG_STATE_HOME:-$HOME/.local/state}/firstmate/procevent-claims}
   for path in "$claim_root"/*.claim; do
     [ -f "$path" ] && [ ! -L "$path" ] || continue
-    IFS= read -r owner < "$path" 2>/dev/null || continue
-    [ "$owner" = "$home" ] && return 0
+    id=${path##*/}; id=${id%.claim}
+    if ! fm_procevent_source_id_valid "$id" \
+      || ! fm_procevent_source_lock_acquire "$id" 2>/dev/null; then
+      IFS= read -r owner < "$path" 2>/dev/null || continue
+      [ "$owner" = "$home" ] && return 0
+      continue
+    fi
+    if fm_procevent_claim_load_locked "$id" 2>/dev/null; then
+      if [ "$FM_PROCEVENT_CLAIM_TERMINAL" != terminal ] \
+        && [ "$FM_PROCEVENT_CLAIM_HOME" = "$home" ]; then
+        fm_procevent_source_lock_release "$id" 2>/dev/null || true
+        return 0
+      fi
+    else
+      IFS= read -r owner < "$path" 2>/dev/null || owner=
+      if [ "$owner" = "$home" ]; then
+        fm_procevent_source_lock_release "$id" 2>/dev/null || true
+        return 0
+      fi
+    fi
+    fm_procevent_source_lock_release "$id" 2>/dev/null || true
   done
   return 1
 }

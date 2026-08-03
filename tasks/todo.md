@@ -120,3 +120,13 @@
 - [x] Emit complete mode-specific promotion contracts from one owner.
 - [x] Correct local-only Herdr teardown fixtures.
 - [x] Run one focused verification.
+
+# Upstream sync review fixes round 2
+
+- [x] Revalidate the five reported findings and their root causes.
+- [x] Separate escalation continuation accounting from auto-arm epochs.
+- [x] Preserve supervision recovery after escalation discharge.
+- [x] Share complete ship rules between briefs and promotions.
+- [x] Preserve legacy terminal registration compatibility.
+- [x] Align teardown with terminal-aware claim classification.
+- [x] Run one focused verification.

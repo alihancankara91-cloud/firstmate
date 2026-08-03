@@ -38,6 +38,7 @@ A fresh leftover beacon blocks when the lock is missing, dead, or identity-misma
 
 The queued-escalation predicate accepts only structurally valid signal keys, maps them to regular non-symlink status files under the effective home, and folds each complete status stream through `queued_open_escalations` in `bin/fm-classify-lib.sh`.
 Queue payload paths are display data rather than authority, while a matching `resolved` or verified `captain-held` event closes the key and draining through `bin/fm-wake-drain.sh` clears the condition.
+Claude counts queued-escalation continuations in a session-scoped budget independent of auto-arm epochs, discharges only that obligation when its bound is exhausted, and still requires supervision recovery before allowing an unhealthy stop.
 `FM_STATE_OVERRIDE` wins over `FM_HOME/state`, and `FM_HOME` wins over repository-root `state/`.
 `FM_GUARD_GRACE` controls beacon freshness and defaults to 300 seconds.
 If `jq` is missing or hook stdin is empty, the guard exits 0 because it cannot safely read loop-guard fields.
@@ -68,7 +69,7 @@ Each epoch identity is accounted at most once under the budget lock.
 Whenever both coordination locks are needed, positive auto-arm recovery and the terminal check acquire the auto-arm owner lock before the budget lock.
 After that alarm, the Stop auto-arm suppresses further exit-2 continuations until positive watcher recovery, so the final fail-open remains reachable.
 The alarm cannot repeat during that failure episode, and a later unhealthy stop blocks again.
-A positively verified healthy watcher clears the failure notice, alarm, and block budget for a future independent episode.
+A positively verified healthy watcher clears the failure notice, alarm, and supervision block budget for a future independent episode, while draining the escalation queue clears its separate continuation budget.
 A Claude failure notice describes the automatic mechanism as broken and does not direct a routine manual background arm.
 
 OpenCode, Pi, and pi-signed expose passive callbacks for this purpose.

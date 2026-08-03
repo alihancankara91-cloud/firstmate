@@ -241,6 +241,12 @@ test_promote_requires_and_records_the_delivery_contract() {
     "direct-PR promotion omitted its concrete completion contract"
   assert_contains "$out" "Never merge a PR" \
     "direct-PR promotion omitted its merge boundary"
+  assert_contains "$out" "2. Stay inside this worktree" \
+    "promotion omitted the shared worktree boundary"
+  assert_contains "$out" "If a decision belongs above the implementation worker" \
+    "promotion omitted the shared escalation authority rule"
+  assert_contains "$out" "Never stop, restart, or update the shared" \
+    "promotion omitted the shared daemon safety rule"
   [ "$(grep -c '^mode=' "$meta")" = 1 ] || fail "promotion left more than one mode= line in the task record"
 
   while IFS='|' read -r mode id expected; do

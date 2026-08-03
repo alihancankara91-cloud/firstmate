@@ -437,6 +437,7 @@ In supported steady state, a home with no registered source runs nothing, genera
 Whether a captured result ends its source is adapter knowledge, never the runner's.
 After publishing a result the runner calls `bin/fm-procevent-<adapter>.sh terminal <result-file>` and retires the registration on exit 0 alone, dropping only the exact registration generation captured by its claim and preserving a machine-wide terminal cutoff under one source boundary; a missing command, an error, or any other exit keeps the source armed, so an adapter with no notion of ending needs no change.
 A failed terminal removal stays durably terminal and is completed by ordinary reconciliation without restarting its poll, every registration made before the terminal cutoff is retired across homes, and a registration made after the cutoff advances the source independently.
+A legacy registration with no generation field and no machine-wide counter is generation zero and preserves the same terminal behavior, while malformed nonempty generation state fails closed.
 A source that has ended therefore captures at most one terminal result, is never restarted, and leaves no recurring poll work, while explicit `retire` stays the supported and idempotent path afterwards.
 For Lavish that verdict covers an ended session, a missing session, and the final feedback of a `Send & End` review, which the published poll marks with `session_ended` before it returns only empty ended sessions.
 
@@ -453,7 +454,8 @@ A live PID whose identity no longer matches is a reused PID, so it is treated as
 Supported secondmate retirement preflights each target home's bounded `sweep-home` command before destructive teardown, snapshots its registrations outside the target, then runs the sweep at that home's final deletion or return boundary.
 If deletion or return fails, teardown restores those registrations and reconciles them before returning the refusal.
 If restoration or rearming also fails, teardown returns a distinct status and reports the retained registration backup path for manual recovery instead of hiding the retired waits.
-The sweep retires local registrations and machine-wide claims physically owned by that home through the same identity-checked, generation-bound retirement path, and leaves foreign-home claims untouched.
+The sweep retires local registrations and nonterminal machine-wide claims physically owned by that home through the same identity-checked, generation-bound retirement path, and leaves foreign-home claims plus terminal tombstones untouched.
+Teardown uses the same validated classification, so a terminal tombstone cannot keep its former home alive.
 Teardown refuses with the home, lease, routing evidence, registrations, claims, and runners retained when identity is uncertain, ownership is unreadable or unreleased, or relevant state exists without a sweep-capable child script.
 Raw manual deletion of a Firstmate home is unsupported because it can orphan a blocking child.
 To recover, restore that home's tracked `bin/fm-procevent.sh`, run `FM_HOME=<home> <home>/bin/fm-procevent.sh sweep-home`, then rerun the supported teardown.

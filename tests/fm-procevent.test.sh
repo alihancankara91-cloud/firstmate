@@ -375,6 +375,26 @@ out=$(pe_adapter "$HTERM" reconcile)
 assert_contains "$out" "published=0" "an acknowledged terminal result stops being re-announced"
 pass "an adapter-classified terminal result is captured once, announced, and retires its source automatically"
 
+HLEGACY="$TMP_ROOT/hlegacy"; new_home "$HLEGACY"
+PE_TRACKED+=("$HLEGACY|legacy-end-src")
+pe_adapter "$HLEGACY" register endnow legacy-end-src -- /bin/echo "legacy terminal payload" >/dev/null
+sed '/^generation=/d' "$HLEGACY/state/procevent/legacy-end-src.source" \
+  > "$HLEGACY/state/procevent/legacy-end-src.source.tmp"
+mv "$HLEGACY/state/procevent/legacy-end-src.source.tmp" \
+  "$HLEGACY/state/procevent/legacy-end-src.source"
+rm -f "$FM_PROCEVENT_CLAIM_ROOT/legacy-end-src.generation"
+out=$(pe_adapter "$HLEGACY" start legacy-end-src)
+assert_contains "$out" "retired: legacy-end-src" \
+  "a legacy registration without generation state did not retire"
+assert_absent "$HLEGACY/state/procevent/legacy-end-src.source" \
+  "legacy terminal retirement retained its registration"
+out=$(pe_adapter "$HLEGACY" reconcile)
+assert_contains "$out" "started=0" \
+  "legacy terminal retirement allowed the source to restart"
+[ "$(count_results "$HLEGACY" legacy-end-src)" = 1 ] \
+  || fail "legacy terminal retirement captured a duplicate result"
+pass "legacy generation-zero registrations retire without duplicate terminal results"
+
 HTERM_A="$TMP_ROOT/hterm-a"; new_home "$HTERM_A"
 HTERM_B="$TMP_ROOT/hterm-b"; new_home "$HTERM_B"
 PE_TRACKED+=("$HTERM_A|shared-end-src" "$HTERM_B|shared-end-src")

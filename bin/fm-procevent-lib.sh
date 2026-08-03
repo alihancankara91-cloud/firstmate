@@ -281,7 +281,7 @@ fm_procevent_claim_acquire_locked() {
 }
 
 fm_procevent_claim_mark_terminal_locked() {
-  local id=$1 home=$2 pid=$3 token=$4 claim root tmp terminal_generation
+  local id=$1 home=$2 pid=$3 token=$4 claim root tmp terminal_generation generation_path registration_generation
   claim=$(fm_procevent_claim_path "$id")
   fm_procevent_claim_load_locked "$id" \
     && [ "$FM_PROCEVENT_CLAIM_HOME" = "$home" ] \
@@ -289,8 +289,18 @@ fm_procevent_claim_mark_terminal_locked() {
     && [ "$FM_PROCEVENT_CLAIM_TOKEN" = "$token" ] \
     && [ -n "$FM_PROCEVENT_CLAIM_REG_IDENTITY" ] || return 1
   root=$(fm_procevent_claim_root)
-  terminal_generation=$(cat "$(fm_procevent_generation_path "$id")" 2>/dev/null || true)
-  case "$terminal_generation" in ''|*[!0-9]*) return 1 ;; esac
+  generation_path=$(fm_procevent_generation_path "$id")
+  if [ -f "$generation_path" ] && [ ! -L "$generation_path" ]; then
+    terminal_generation=$(cat "$generation_path" 2>/dev/null || true)
+    case "$terminal_generation" in ''|*[!0-9]*) return 1 ;; esac
+  elif [ ! -e "$generation_path" ] && [ ! -L "$generation_path" ]; then
+    registration_generation=$(fm_procevent_registration_generation \
+      "$FM_PROCEVENT_CLAIM_REG_DIR/$id.source" 2>/dev/null) || return 1
+    [ "$registration_generation" -eq 0 ] || return 1
+    terminal_generation=0
+  else
+    return 1
+  fi
   tmp=$(umask 077; mktemp "$root/.claim.XXXXXX") || return 1
   if printf '%s\n%s\n%s\n%s\n%s\n%s\nterminal\n%s\n' \
     "$FM_PROCEVENT_CLAIM_HOME" "$FM_PROCEVENT_CLAIM_PID" "$FM_PROCEVENT_CLAIM_TOKEN" \

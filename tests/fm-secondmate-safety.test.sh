@@ -1571,6 +1571,30 @@ test_secondmate_teardown_sweeps_process_events_before_removal() {
   pass "normal secondmate teardown sweeps process events before removal"
 }
 
+test_secondmate_teardown_ignores_terminal_process_event_tombstone() {
+  local home subhome fakebin log claim_root
+  home="$TMP_ROOT/procevent-terminal-home"
+  subhome="$TMP_ROOT/procevent-terminal-subhome"
+  claim_root="$TMP_ROOT/procevent-terminal-claims"
+  mkdir -p "$home/state" "$home/data" "$subhome/state" "$claim_root"
+  mark_firstmate_home "$subhome"
+  printf 'domain\n' > "$subhome/.fm-secondmate-home"
+  printf '%s\n999999\nterminal-token\nterminal-identity\n%s\n1:1\nterminal\n1\n' \
+    "$subhome" "$subhome/state/procevent" > "$claim_root/source.claim"
+  fm_write_secondmate_meta "$home/state/domain.meta" "$subhome"
+  printf '%s\n' '- domain - design domain (home: '"$subhome"'; scope: design domain; projects: alpha; added 2026-06-22)' > "$home/data/secondmates.md"
+  fakebin=$(make_fake_tmux "$TMP_ROOT/procevent-terminal-fake")
+  log="$TMP_ROOT/procevent-terminal-fake/tmux.log"
+
+  PATH="$fakebin:$PATH" FM_HOME="$home" FM_PROCEVENT_CLAIM_ROOT="$claim_root" \
+    FM_FAKE_TMUX_LOG="$log" FM_FAKE_TMUX_CAPTURE="$TMP_ROOT/procevent-terminal-fake/pane.txt" \
+    "$ROOT/bin/fm-teardown.sh" domain >/dev/null 2>/dev/null \
+    || fail "terminal process-event tombstone prevented secondmate teardown"
+  [ ! -d "$subhome" ] || fail "terminal process-event tombstone retained the retired home"
+  [ -e "$claim_root/source.claim" ] || fail "secondmate teardown removed the machine-wide terminal tombstone"
+  pass "secondmate teardown ignores terminal process-event tombstones owned by the retired home"
+}
+
 test_secondmate_teardown_refuses_process_events_without_sweep_script() {
   local home subhome fakebin log err claim_root
   home="$TMP_ROOT/procevent-refusal-home"
@@ -2647,6 +2671,7 @@ test_fm_send_refuses_bare_window_without_home_meta
 test_secondmate_teardown_retires_empty_home
 test_secondmate_teardown_refuses_ambiguous_and_mismatched_registry_bindings
 test_secondmate_teardown_sweeps_process_events_before_removal
+test_secondmate_teardown_ignores_terminal_process_event_tombstone
 test_secondmate_teardown_refuses_process_events_without_sweep_script
 test_secondmate_teardown_preserves_process_events_on_later_refusal
 test_secondmate_force_teardown_sweeps_nested_homes

@@ -1183,7 +1183,7 @@ test_hook_claude_mode_reblocks_x_mode_without_tasks() {
 }
 
 test_hook_claude_mode_blocks_healthy_pending_escalation() {
-  local dir pid identity out status note
+  local dir pid identity out status note i count
   dir=$(make_primary_dir "$TMP_ROOT/hook-claude-pending-escalation")
   : > "$dir/state/task.meta"
   note='need=choose release path | options=hold; ship | recommend=hold pending review'
@@ -1194,16 +1194,44 @@ test_hook_claude_mode_blocks_healthy_pending_escalation() {
   identity=$(watcher_identity "$dir" "$pid") || fail "could not identify live watcher holder"
   record_watcher_lock "$dir" "$pid" "$identity"
   touch "$dir/state/.last-watcher-beat"
+  printf 'epoch=9 owner_pid=%s outcome=arming updated_at=%s\n' "$pid" "$(date +%s)" \
+    > "$dir/state/.claude-autoarm-epoch"
 
+  for i in 1 2 3; do
+    out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" true); status=$?
+    expect_code 2 "$status" "healthy Claude escalation continuation $i must remain bounded"
+    count=$(sed -n '2s/^count=//p' "$dir/state/.turnend-claude-escalation-blocks")
+    [ "$count" = "$i" ] || fail "escalation continuation $i recorded count $count"
+  done
   out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" true); status=$?
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
-  expect_code 2 "$status" "healthy Claude supervision must not discharge a queued escalation"
-  assert_contains "$out" "Decision needed for task [release-path]: $note" \
-    "Claude escalation continuation omitted the pending decision"
-  assert_not_contains "$out" "SUPERVISION IS OFF" \
-    "Claude escalation continuation misreported healthy supervision"
-  pass "fm-turnend-guard --claude: healthy supervision cannot hide a queued escalation"
+  expect_code 0 "$status" "the fourth escalation continuation must discharge its independent bound"
+  assert_contains "$out" "continuation obligation is discharged" \
+    "bounded escalation discharge was not reported"
+  count=$(sed -n '2s/^count=//p' "$dir/state/.turnend-claude-escalation-blocks")
+  [ "$count" = 4 ] || fail "bounded escalation discharge lost its session count: $count"
+  pass "fm-turnend-guard --claude: escalation bounds advance independently of one auto-arm epoch"
+}
+
+test_hook_claude_mode_escalation_discharge_preserves_supervision_block() {
+  local dir out status note
+  dir=$(make_primary_dir "$TMP_ROOT/hook-claude-escalation-supervision")
+  : > "$dir/state/task.meta"
+  note='need=choose release path | options=hold; ship | recommend=hold pending review'
+  printf 'blocked [key=release-path]: %s\n' "$note" > "$dir/state/task.status"
+  printf '%s\t1\tsignal\ttask.status\tsignal: task.status\n' "$(date +%s)" > "$dir/state/.wake-queue"
+  printf 'session=sess-claude-mode\ncount=3\n' > "$dir/state/.turnend-claude-escalation-blocks"
+
+  out=$(FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=100 run_hook_claude "$dir" true); status=$?
+  expect_code 2 "$status" "escalation discharge must not permit a stop while supervision is down"
+  assert_contains "$out" "TURN WOULD END BLIND - SUPERVISION IS OFF" \
+    "supervision recovery was skipped after escalation discharge"
+  assert_not_contains "$out" "WORKER ESCALATION IS STILL UNDRAINED" \
+    "the discharged escalation was re-enforced by the supervision path"
+  [ "$(sed -n '2s/^count=//p' "$dir/state/.turnend-claude-escalation-blocks")" = 4 ] \
+    || fail "supervision recovery lost the discharged escalation count"
+  pass "fm-turnend-guard --claude: escalation discharge cannot bypass supervision recovery"
 }
 
 test_hook_claude_mode_allows_when_autoarm_owner_alive() {
@@ -1683,6 +1711,7 @@ test_pi_extension_retries_after_followup_delivery_failure
 test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy
 test_hook_claude_mode_reblocks_x_mode_without_tasks
 test_hook_claude_mode_blocks_healthy_pending_escalation
+test_hook_claude_mode_escalation_discharge_preserves_supervision_block
 test_hook_claude_mode_allows_when_autoarm_owner_alive
 test_hook_claude_mode_repeated_failed_to_arming_interleavings_reach_fail_open
 test_hook_claude_mode_terminal_boundary_excludes_starting_owner

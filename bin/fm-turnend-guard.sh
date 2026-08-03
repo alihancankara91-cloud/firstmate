@@ -144,6 +144,7 @@ PENDING_ESCALATIONS=$(queued_open_escalations "$STATE/.wake-queue" "$STATE")
 
 BUDGET_FILE="$STATE/.turnend-claude-blocks"
 BUDGET_LOCK="$STATE/.turnend-claude-blocks.lock"
+ESCALATION_BUDGET_FILE="$STATE/.turnend-claude-escalation-blocks"
 OWNER_LOCK="$STATE/.claude-autoarm.lock"
 FAILURE_NOTICE="$STATE/.claude-autoarm-failure-notified"
 FAILURE_ALARM="$STATE/.claude-autoarm-failure-alarmed"
@@ -154,6 +155,15 @@ budget_reset() {
   rm -f "$BUDGET_FILE" 2>/dev/null || true
   fm_lock_release "$BUDGET_LOCK"
 }
+
+escalation_budget_reset() {
+  [ "$CLAUDE_MODE" -eq 1 ] || return 0
+  fm_lock_try_acquire "$BUDGET_LOCK" || return 0
+  rm -f "$ESCALATION_BUDGET_FILE" 2>/dev/null || true
+  fm_lock_release "$BUDGET_LOCK"
+}
+
+[ -n "$PENDING_ESCALATIONS" ] || escalation_budget_reset
 
 fm_supervision_status "$STATE" "$GRACE"
 WATCHER_UNHEALTHY=0
@@ -278,6 +288,29 @@ budget_account_current_epoch() {
   return 0
 }
 
+escalation_budget_account() {
+  local old_session old_count tmp
+  fm_lock_try_acquire "$BUDGET_LOCK" || return 1
+  ESCALATION_COUNT=0
+  if [ -f "$ESCALATION_BUDGET_FILE" ]; then
+    old_session=$(sed -n '1s/^session=//p' "$ESCALATION_BUDGET_FILE" 2>/dev/null || true)
+    old_count=$(sed -n '2s/^count=//p' "$ESCALATION_BUDGET_FILE" 2>/dev/null || true)
+    case "$old_count" in
+      ''|*[!0-9]*) old_count=0 ;;
+    esac
+    [ "$old_session" = "$SESSION_ID" ] && ESCALATION_COUNT=$old_count
+  fi
+  ESCALATION_COUNT=$((ESCALATION_COUNT + 1))
+  tmp="$ESCALATION_BUDGET_FILE.tmp.$$"
+  if ! printf 'session=%s\ncount=%s\n' "$SESSION_ID" "$ESCALATION_COUNT" > "$tmp" 2>/dev/null \
+    || ! mv -f "$tmp" "$ESCALATION_BUDGET_FILE" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null || true
+    fm_lock_release "$BUDGET_LOCK"
+    return 1
+  fi
+  fm_lock_release "$BUDGET_LOCK"
+}
+
 autoarm_owns_recovery() {
   local pid role outcome age
   fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME" && return 0
@@ -379,14 +412,23 @@ failure_episode_verified() {
   esac
 }
 
+ESCALATION_NOTICE=
+allow_stop() {
+  [ -z "$ESCALATION_NOTICE" ] || printf '{"systemMessage":"%s"}\n' "$ESCALATION_NOTICE"
+  exit 0
+}
+
 if [ -n "$PENDING_ESCALATIONS" ]; then
-  budget_account_current_epoch || block_stop
-  if [ "$COUNT" -gt "$BLOCK_BUDGET" ]; then
-    budget_reset
-    printf '{"systemMessage":"firstmate turn-end guard: an undrained worker escalation remains after the bounded continuation budget; allowing this stop. Run bin/fm-wake-drain.sh and handle the concrete escalation before relying on another reply."}\n'
-    exit 0
+  escalation_budget_account || block_stop
+  if [ "$ESCALATION_COUNT" -le "$BLOCK_BUDGET" ]; then
+    block_stop
   fi
-  block_stop
+  ESCALATION_NOTICE='firstmate turn-end guard: an undrained worker escalation remains after the bounded continuation budget; its continuation obligation is discharged. Run bin/fm-wake-drain.sh and handle the concrete escalation before relying on another reply.'
+  PENDING_ESCALATIONS=
+  if [ "$WATCHER_UNHEALTHY" -eq 0 ]; then
+    fm_failure_episode_reset "$STATE" || exit 2
+    allow_stop
+  fi
 fi
 
 i=0
@@ -395,7 +437,7 @@ while [ "$i" -lt $((SYNC_WAIT_MS / 100)) ]; do
     if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
       fm_failure_episode_reset "$STATE" || exit 2
     fi
-    exit 0
+    allow_stop
   fi
   sleep 0.1
   i=$((i + 1))
@@ -404,7 +446,7 @@ if autoarm_owns_recovery; then
   if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
     fm_failure_episode_reset "$STATE" || exit 2
   fi
-  exit 0
+  allow_stop
 fi
 
 # The auto-arm genuinely failed to establish: consume the bounded re-block
@@ -423,5 +465,5 @@ if [ "$terminal_status" -eq 0 ]; then
   printf '{"systemMessage":"FIRSTMATE SUPERVISION IS GENUINELY DOWN: %s, the Stop-owned auto-arm exhausted its bounded retries and one failure notice, no watcher or automatic continuation exists, and the block budget is exhausted. Keep this session attended and diagnose the automatic Stop-hook and watcher startup before relying on unattended supervision."}\n' "$NEED_DESC"
   exit 0
 fi
-[ "$terminal_status" -eq 2 ] && exit 0
+[ "$terminal_status" -eq 2 ] && allow_stop
 block_stop
