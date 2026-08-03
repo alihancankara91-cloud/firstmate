@@ -1,5 +1,7 @@
 # Lessons
 
+- Synthetic script roots are compatibility contracts: when an entry point gains an unconditional sibling dependency, every historical or isolated fixture must materialize that dependency too.
+- Lifecycle E2E fixtures must record a delivery mode consistent with the scratch project's registered posture so teardown tests cleanup rather than a deliberate delivery refusal.
 - Per-home E2E teardown fixtures must pass the same `FM_HOME` that owned the spawn so endpoint validation and cleanup exercise the real runtime context.
 - Cleanup schema hardening needs an explicit compatibility path for durable records written by earlier releases.
 - Legacy cleanup must authorize durable worktree removal and live endpoint closure independently, with authoritative absence distinct from unreadable or foreign state.

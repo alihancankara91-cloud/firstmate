@@ -1,5 +1,9 @@
 # Gotchas
 
+- The changed-test selector currently has no mapping for `bin/fm-delivery-contract-lib.sh`; use its known consumers' tests when validating an isolated lint-only edit.
+- Resolve focused test filenames with `rg --files tests` before invoking a guessed contract-test path.
+- Portable serial shard lane names include both shard index and count, for example `portable-serial-4of4`.
+- Historical script fixtures must copy every library sourced by the materialized entry point, including dependencies added after the original conformance test was written.
 - A no-mistakes PR worktree may still lack worktree-local gate initialization, so inspect `doctor` before assuming the existing PR run is attachable.
 - Re-read the current task ledger before patching it because another crewmate may have already changed the expected context.
 - A focused portable failure can expose a stale synthetic assertion when a stronger fail-closed validation now rejects the fixture earlier.

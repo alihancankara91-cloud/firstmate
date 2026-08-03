@@ -29,8 +29,10 @@ The configured merge authority approves the ready branch, then firstmate merges 
 EOF
       ;;
     no-mistakes)
+      # shellcheck disable=SC2034 # Output global consumed by sourcing callers.
       FM_DELIVERY_SETUP="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
+      # shellcheck disable=SC2034 # Output global consumed by sourcing callers.
       FM_DELIVERY_RULE1='1. Never push to the default branch. Never merge a PR.'
       IFS= read -r -d '' FM_DELIVERY_DOD <<EOF || true
 # Definition of done

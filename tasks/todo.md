@@ -1,5 +1,10 @@
 # CI behavior failure fixes
 
+- [x] Reproduce all four current CI check failures through their exact local entry points.
+- [x] Identify the earliest shared divergence in fixtures or runtime behavior.
+- [x] Apply the smallest cross-platform root-cause fix.
+- [x] Run the focused behavior and repository lint checks.
+
 - [x] Diagnose the portable secondmate teardown failure and the Herdr per-home teardown failure.
 - [x] Update the stale portable assertion and restore faithful per-home teardown context.
 - [x] Run focused portable and Herdr verification.
