@@ -201,7 +201,7 @@ EOF
 # Promotion is where a scout's ship contract is finally decided, so it requires the
 # same explicit values and writes them into the task's durable record.
 test_promote_requires_and_records_the_delivery_contract() {
-  local home meta out status
+  local home meta out status mode id expected
   home="$TMP_ROOT/promote/home"
   mkdir -p "$home/state"
   meta="$home/state/promote-d1.meta"
@@ -233,8 +233,28 @@ test_promote_requires_and_records_the_delivery_contract() {
   assert_grep 'kind=ship' "$meta" "promotion did not restore ship teardown protection"
   assert_grep 'mode=direct-PR' "$meta" "promotion did not record the decided delivery mode"
   assert_grep 'yolo=on' "$meta" "promotion did not record the decided approval posture"
-  assert_contains "$out" "ship instructions for mode=direct-PR" "promotion hint did not carry the decided mode"
+  assert_contains "$out" "Your scout Setup, Rules, and Definition of done are replaced" \
+    "promotion did not explicitly replace the scout contract"
+  assert_contains "$out" "Delivery contract: mode=direct-PR" \
+    "promotion follow-up did not carry the decided mode"
+  assert_contains "$out" "push your branch and open a PR" \
+    "direct-PR promotion omitted its concrete completion contract"
+  assert_contains "$out" "Never merge a PR" \
+    "direct-PR promotion omitted its merge boundary"
   [ "$(grep -c '^mode=' "$meta")" = 1 ] || fail "promotion left more than one mode= line in the task record"
+
+  while IFS='|' read -r mode id expected; do
+    meta="$home/state/$id.meta"
+    printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$id" > "$meta"
+    out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" "$PROMOTE" "$id" --mode "$mode" --yolo off 2>&1)
+    assert_contains "$out" "Delivery contract: mode=$mode" \
+      "$mode promotion follow-up did not carry its delivery contract"
+    assert_contains "$out" "$expected" \
+      "$mode promotion follow-up omitted its concrete completion contract"
+  done <<'ROWS'
+no-mistakes|promote-d2|no-mistakes axi respond
+local-only|promote-d3|done: ready in branch fm/promote-d3
+ROWS
   pass "fm-promote: promotion requires the delivery contract and records it exactly once"
 }
 

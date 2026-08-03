@@ -57,3 +57,9 @@
 - The local tasks/ ledger is ignored operational state in this checkout; do not stage it in the merge commit, but keep the plan and lessons available to the supervising firstmate.
 - The second full `--all` run exceeded a 60-minute bound without returning a summary; inspect its saved log and use the runner's lane partitions to identify a slow or blocked lane instead of repeatedly rerunning the whole suite blindly.
 - Parallel portable serial shards exposed shared-environment failures and one timeout in PR-check, teardown, and bootstrap tests; lane sharding is not a substitute for serializing suites with external runtime dependencies, so treat those outcomes as environment evidence until reproduced in isolation.
+
+## 2026-08-03 - Patch exact generated test contexts
+
+- A multi-file review patch missed the Herdr launcher fixture because the target command carried an inline environment prefix.
+- Re-read exact target lines before applying a cross-file patch.
+- Search the entire focused test for old lifecycle assertions after changing a shared terminal-state invariant.

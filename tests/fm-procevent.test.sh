@@ -357,7 +357,7 @@ out=$(pe_adapter "$HTERM" start ends-src)
 assert_contains "$out" "captured:" "a terminal result is still captured durably"
 assert_contains "$out" "retired: ends-src" "the runner reports the adapter-driven retirement"
 assert_absent "$HTERM/state/procevent/ends-src.source" "an adapter-classified terminal result retires its registration"
-assert_absent "$FM_PROCEVENT_CLAIM_ROOT/ends-src.claim" "terminal retirement releases this runner's own claim"
+assert_present "$FM_PROCEVENT_CLAIM_ROOT/ends-src.claim" "terminal retirement preserves the machine-wide terminal generation"
 assert_contains "$(wake_payloads "$HTERM")" "procevent endnow ends-src 1" "the terminal result is still announced"
 [ "$(count_results "$HTERM" ends-src)" = 1 ] || fail "terminal retirement lost or duplicated the captured result"
 TERMINAL_RESULT=$(first_result "$HTERM" ends-src || true)
@@ -368,11 +368,35 @@ assert_contains "$out" "published=1" "an unhandled terminal result is still re-a
 [ "$(count_results "$HTERM" ends-src)" = 1 ] || fail "a retired terminal source ran its poll again"
 out=$(pe_adapter "$HTERM" retire ends-src)
 assert_contains "$out" "retired: ends-src" "explicit retirement stays supported and idempotent after automatic retirement"
+assert_present "$FM_PROCEVENT_CLAIM_ROOT/ends-src.claim" "home-local retirement does not erase machine-wide terminal knowledge"
 ack_out=$(pe_adapter "$HTERM" handled ends-src 1)
 assert_contains "$ack_out" "handled: ends-src 1" "a terminal result is acknowledged through the owned interface"
 out=$(pe_adapter "$HTERM" reconcile)
 assert_contains "$out" "published=0" "an acknowledged terminal result stops being re-announced"
 pass "an adapter-classified terminal result is captured once, announced, and retires its source automatically"
+
+HTERM_A="$TMP_ROOT/hterm-a"; new_home "$HTERM_A"
+HTERM_B="$TMP_ROOT/hterm-b"; new_home "$HTERM_B"
+PE_TRACKED+=("$HTERM_A|shared-end-src" "$HTERM_B|shared-end-src")
+pe_adapter "$HTERM_A" register endnow shared-end-src -- /bin/echo "shared terminal payload" >/dev/null
+pe_adapter "$HTERM_B" register endnow shared-end-src -- /bin/echo "stale second-home payload" >/dev/null
+out=$(pe_adapter "$HTERM_A" start shared-end-src)
+assert_contains "$out" "captured:" "the first home captures the shared terminal result"
+assert_present "$HTERM_B/state/procevent/shared-end-src.source" \
+  "terminal capture does not mutate another home's registry directly"
+out=$(pe_adapter "$HTERM_B" reconcile)
+assert_contains "$out" "started=0" "a pre-terminal second-home registration is not restarted"
+assert_absent "$HTERM_B/state/procevent/shared-end-src.source" \
+  "the terminal cutoff retires a pre-terminal second-home registration"
+[ "$(count_results "$HTERM_B" shared-end-src)" = 0 ] \
+  || fail "the second home captured a duplicate terminal result"
+pe_adapter "$HTERM_B" register openended shared-end-src -- /bin/echo "later generation payload" >/dev/null
+out=$(pe_adapter "$HTERM_B" start shared-end-src)
+assert_contains "$out" "captured:" "a post-terminal registration generation can advance the source"
+[ "$(count_results "$HTERM_B" shared-end-src)" = 1 ] \
+  || fail "the later generation did not capture exactly one result"
+pe_adapter "$HTERM_B" retire shared-end-src >/dev/null
+pass "terminal retirement blocks every pre-terminal home and permits a later registration generation"
 
 HOPEN="$TMP_ROOT/hopen"; new_home "$HOPEN"
 PE_TRACKED+=("$HOPEN|open-src")
@@ -434,8 +458,8 @@ assert_contains "$out" "started=0" "failed terminal retirement never restarts th
 pe_adapter "$HRETFAIL" reconcile >/dev/null
 assert_absent "$HRETFAIL/state/procevent/retire-fail-src.source" \
   "repeated retirement removes the same registration once removal recovers"
-assert_absent "$FM_PROCEVENT_CLAIM_ROOT/retire-fail-src.claim" \
-  "the claim releases only after that registration is removed"
+assert_present "$FM_PROCEVENT_CLAIM_ROOT/retire-fail-src.claim" \
+  "retirement recovery preserves the terminal generation after registration removal"
 [ "$(count_results "$HRETFAIL" retire-fail-src)" = 1 ] \
   || fail "retirement recovery reran the terminal source"
 pass "failed terminal retirement is fail-closed and idempotently recoverable"
@@ -483,7 +507,7 @@ done
   || fail "one Send & End produced more than one distinct event: $(wake_payloads "$HLT" | sort -u)"
 assert_contains "$(wake_payloads "$HLT")" "procevent lavish $lavish_id 1" "the human's final feedback is announced"
 assert_absent "$HLT/state/procevent/$lavish_id.source" "the ended review source retires automatically"
-assert_absent "$FM_PROCEVENT_CLAIM_ROOT/$lavish_id.claim" "the ended review releases its owned claim"
+assert_present "$FM_PROCEVENT_CLAIM_ROOT/$lavish_id.claim" "the ended review preserves its terminal cutoff"
 LAVISH_RESULT=$(first_result "$HLT" "$lavish_id" || true)
 assert_grep 'ship it' "$LAVISH_RESULT" "automatic retirement retains the human's final feedback"
 out=$(PATH="$LAVISH_BIN:$PATH" FM_HOME="$HLT" "$ROOT/bin/fm-procevent-lavish.sh" retire "$REVIEW_ART")

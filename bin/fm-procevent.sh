@@ -37,9 +37,10 @@
 #            twice. Until this is called, the result stays eligible for
 #            bounded re-announcement on every reconcile. Marking a result
 #            handled does not retire its source registration or claim.
-# retire     Drop a registration, stop a runner this home owns, release the claim.
-#            Idempotent, and still the supported explicit path after a source has
-#            already retired itself on its adapter's terminal verdict.
+# retire     Drop a registration and stop a runner this home owns. Idempotent,
+#            and still the supported explicit path after a source has already
+#            retired itself on its adapter's terminal verdict. A machine-wide
+#            terminal-generation tombstone remains until a later registration.
 # sweep-home Retire a bounded snapshot of this home's registrations and owned
 #            claims, then refuse unless no registration, runner record, or owned
 #            claim remains. Used by supported Firstmate home retirement.
@@ -133,17 +134,31 @@ cmd_register() {
   done
   [ -f "$(adapter_script "$adapter")" ] || die "no installed adapter for: $adapter"
   (umask 077; mkdir -p "$REG") || die "cannot create the source registry"
-  local tmp dest
+  local tmp dest generation
   dest=$(source_file "$id")
   tmp=$(umask 077; mktemp "$REG/.source.XXXXXX") || die "cannot stage the registration"
+  fm_procevent_source_lock_acquire "$id" || { rm -f -- "$tmp"; die "cannot lock the source"; }
+  generation=$(fm_procevent_next_generation_locked "$id") || {
+    fm_procevent_source_lock_release "$id"
+    rm -f -- "$tmp"
+    die "cannot allocate a registration generation"
+  }
   {
     printf 'adapter=%s\n' "$adapter"
+    printf 'generation=%s\n' "$generation"
     printf 'argc=%s\n' "$#"
     printf 'argv:\n'
     printf '%s\n' "$@"
-  } > "$tmp" || { rm -f -- "$tmp"; die "cannot write the registration"; }
-  chmod 0600 "$tmp" || { rm -f -- "$tmp"; die "cannot secure the registration"; }
-  fm_procevent_source_lock_acquire "$id" || { rm -f -- "$tmp"; die "cannot lock the source"; }
+  } > "$tmp" || {
+    fm_procevent_source_lock_release "$id"
+    rm -f -- "$tmp"
+    die "cannot write the registration"
+  }
+  chmod 0600 "$tmp" || {
+    fm_procevent_source_lock_release "$id"
+    rm -f -- "$tmp"
+    die "cannot secure the registration"
+  }
   if ! mv -f -- "$tmp" "$dest"; then
     fm_procevent_source_lock_release "$id"
     rm -f -- "$tmp"
@@ -340,11 +355,12 @@ cmd_start() {
 
 # Retire a source this runner owns because its adapter classified the captured
 # result terminal. Ownership is re-proved, the registration is dropped, and this
-# runner's own claim is released under ONE source-lock hold, so no concurrent
+# runner's terminal generation is preserved under ONE source-lock hold, so no
+# concurrent
 # reconcile can observe a registered source with no owner (and start a
 # replacement) or an owned claim with no registration (and signal this runner
 # mid-exit), and a generation this runner no longer owns is never unregistered.
-# The EXIT trap's own release then no-ops, because the generation is already gone.
+# The EXIT trap's own release then no-ops on the terminal tombstone.
 retire_owned_terminal_source() {  # <source-id>
   local id=$1 status=0 registration current_identity
   registration=$(source_file "$id")
@@ -357,9 +373,7 @@ retire_owned_terminal_source() {  # <source-id>
     && current_identity=$(fm_pr_file_identity "$registration" 2>/dev/null) \
     && [ "$current_identity" = "$CLAIM_REG_IDENTITY" ] \
     && fm_procevent_claim_mark_terminal_locked "$id" "$CLAIM_HOME" "$CLAIM_PID" "$CLAIM_TOKEN"; then
-    if rm -f -- "$registration" && [ ! -e "$registration" ] && [ ! -L "$registration" ]; then
-      fm_procevent_claim_release_locked "$id" "$CLAIM_HOME" "$CLAIM_PID" "$CLAIM_TOKEN" || status=1
-    else
+    if ! rm -f -- "$registration" || [ -e "$registration" ] || [ -L "$registration" ]; then
       status=1
     fi
   else
@@ -387,12 +401,16 @@ cmd_reconcile() {
     id=${claim##*/}; id=${id%.claim}
     fm_procevent_source_id_valid "$id" || continue
     fm_procevent_source_lock_acquire "$id" || continue
-    if [ -f "$(source_file "$id")" ] && [ ! -L "$(source_file "$id")" ]; then
+    if ! fm_procevent_claim_load_locked "$id" 2>/dev/null; then
+      uncertain=$((uncertain + 1))
       fm_procevent_source_lock_release "$id"
       continue
     fi
-    if ! fm_procevent_claim_load_locked "$id" 2>/dev/null; then
-      uncertain=$((uncertain + 1))
+    if [ "$FM_PROCEVENT_CLAIM_TERMINAL" = terminal ]; then
+      fm_procevent_source_lock_release "$id"
+      continue
+    fi
+    if [ -f "$(source_file "$id")" ] && [ ! -L "$(source_file "$id")" ]; then
       fm_procevent_source_lock_release "$id"
       continue
     fi
@@ -428,7 +446,7 @@ cmd_reconcile() {
       fm_procevent_source_id_valid "$id" || continue
       fm_procevent_source_lock_acquire "$id" || continue
       if [ -f "$(source_file "$id")" ] && [ ! -L "$(source_file "$id")" ]; then
-        fm_procevent_claim_state_locked "$id"
+        fm_procevent_claim_state_locked "$id" "$(source_file "$id")"
         claim_state=$?
         if [ "$claim_state" -eq 1 ]; then
           fm_procevent_source_lock_release "$id"
@@ -439,11 +457,9 @@ cmd_reconcile() {
           owner=$FM_PROCEVENT_CLAIM_HOME
           pid=$FM_PROCEVENT_CLAIM_PID
           token=$FM_PROCEVENT_CLAIM_TOKEN
-          if [ "$owner" = "$FM_HOME" ] \
-            && rm -f -- "$(source_file "$id")" \
+          if rm -f -- "$(source_file "$id")" \
             && [ ! -e "$(source_file "$id")" ] \
-            && [ ! -L "$(source_file "$id")" ] \
-            && fm_procevent_claim_release_locked "$id" "$owner" "$pid" "$token" 2>/dev/null; then
+            && [ ! -L "$(source_file "$id")" ]; then
             stopped=$((stopped + 1))
           else
             uncertain=$((uncertain + 1))
@@ -558,7 +574,8 @@ cmd_retire() {
       fm_procevent_source_lock_release "$id"
       die "cannot safely read source ownership: $id"
     fi
-    if [ "$FM_PROCEVENT_CLAIM_HOME" = "$FM_HOME" ]; then
+    if [ "$FM_PROCEVENT_CLAIM_TERMINAL" != terminal ] \
+      && [ "$FM_PROCEVENT_CLAIM_HOME" = "$FM_HOME" ]; then
       owner=$FM_PROCEVENT_CLAIM_HOME
       pid=$FM_PROCEVENT_CLAIM_PID
       token=$FM_PROCEVENT_CLAIM_TOKEN
@@ -591,7 +608,7 @@ sweep_add_id() {
 }
 
 sweep_relevant_state() {
-  local path owner
+  local path id
   for path in "$REG"/*.source "$REG"/*.runner; do
     if [ -e "$path" ] || [ -L "$path" ]; then
       return 0
@@ -599,8 +616,16 @@ sweep_relevant_state() {
   done
   for path in "$(fm_procevent_claim_root)"/*.claim; do
     [ -f "$path" ] && [ ! -L "$path" ] || continue
-    IFS= read -r owner < "$path" 2>/dev/null || continue
-    [ "$owner" = "$FM_HOME" ] && return 0
+    id=${path##*/}; id=${id%.claim}
+    fm_procevent_source_id_valid "$id" || continue
+    fm_procevent_source_lock_acquire "$id" 2>/dev/null || return 0
+    if ! fm_procevent_claim_load_locked "$id" 2>/dev/null \
+      || { [ "$FM_PROCEVENT_CLAIM_TERMINAL" != terminal ] \
+        && [ "$FM_PROCEVENT_CLAIM_HOME" = "$FM_HOME" ]; }; then
+      fm_procevent_source_lock_release "$id" 2>/dev/null || true
+      return 0
+    fi
+    fm_procevent_source_lock_release "$id" 2>/dev/null || true
   done
   return 1
 }
@@ -613,7 +638,8 @@ sweep_source_preflight() {
       fm_procevent_source_lock_release "$id"
       return 1
     fi
-    if [ "$FM_PROCEVENT_CLAIM_HOME" = "$FM_HOME" ]; then
+    if [ "$FM_PROCEVENT_CLAIM_TERMINAL" != terminal ] \
+      && [ "$FM_PROCEVENT_CLAIM_HOME" = "$FM_HOME" ]; then
       fm_procevent_pid_state "$FM_PROCEVENT_CLAIM_PID" "$FM_PROCEVENT_CLAIM_IDENTITY"
       state=$?
       if [ "$state" -eq 2 ]; then
@@ -626,7 +652,7 @@ sweep_source_preflight() {
 }
 
 cmd_sweep_home() {
-  local preflight_only=${1-} path id owner attempted=0 failed=0
+  local preflight_only=${1-} path id attempted=0 failed=0
   [ -z "$preflight_only" ] || [ "$preflight_only" = --preflight ] || usage
   SWEEP_IDS=$'\n'
   for path in "$REG"/*.source; do
@@ -641,14 +667,19 @@ cmd_sweep_home() {
   done
   for path in "$(fm_procevent_claim_root)"/*.claim; do
     [ -f "$path" ] && [ ! -L "$path" ] || continue
-    IFS= read -r owner < "$path" 2>/dev/null || continue
-    [ "$owner" = "$FM_HOME" ] || continue
     id=${path##*/}; id=${id%.claim}
-    if fm_procevent_source_id_valid "$id"; then
-      sweep_add_id "$id"
-    else
+    if ! fm_procevent_source_id_valid "$id"; then
       failed=$((failed + 1))
+      continue
     fi
+    fm_procevent_source_lock_acquire "$id" || { failed=$((failed + 1)); continue; }
+    if ! fm_procevent_claim_load_locked "$id" 2>/dev/null; then
+      failed=$((failed + 1))
+    elif [ "$FM_PROCEVENT_CLAIM_TERMINAL" != terminal ] \
+      && [ "$FM_PROCEVENT_CLAIM_HOME" = "$FM_HOME" ]; then
+      sweep_add_id "$id"
+    fi
+    fm_procevent_source_lock_release "$id"
   done
   for path in "$REG"/*.runner; do
     if [ -e "$path" ] || [ -L "$path" ]; then

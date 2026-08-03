@@ -379,6 +379,16 @@ failure_episode_verified() {
   esac
 }
 
+if [ -n "$PENDING_ESCALATIONS" ]; then
+  budget_account_current_epoch || block_stop
+  if [ "$COUNT" -gt "$BLOCK_BUDGET" ]; then
+    budget_reset
+    printf '{"systemMessage":"firstmate turn-end guard: an undrained worker escalation remains after the bounded continuation budget; allowing this stop. Run bin/fm-wake-drain.sh and handle the concrete escalation before relying on another reply."}\n'
+    exit 0
+  fi
+  block_stop
+fi
+
 i=0
 while [ "$i" -lt $((SYNC_WAIT_MS / 100)) ]; do
   if autoarm_owns_recovery; then

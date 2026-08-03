@@ -111,3 +111,12 @@
 - [ ] Export conflict evidence, prove ancestry, and run the full local test suite plus focused lint.
 - [ ] Drive no-mistakes through green CI and open the required PR without merging it.
 - [x] Run one focused verification.
+
+# Upstream sync review fixes
+
+- [x] Validate the four reported findings against code, tests, and history.
+- [x] Separate Claude escalation enforcement from supervision recovery.
+- [x] Preserve cross-home terminal process-event generations.
+- [x] Emit complete mode-specific promotion contracts from one owner.
+- [x] Correct local-only Herdr teardown fixtures.
+- [x] Run one focused verification.

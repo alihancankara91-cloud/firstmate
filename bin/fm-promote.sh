@@ -20,6 +20,9 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
+# shellcheck source=bin/fm-delivery-contract-lib.sh
+. "$SCRIPT_DIR/fm-delivery-contract-lib.sh"
+
 MODE=
 YOLO=
 MODE_SET=0
@@ -84,5 +87,18 @@ grep -v -e '^kind=' -e '^mode=' -e '^yolo=' "$META" > "$TMP"
 mv "$TMP" "$META"
 
 HOME_Q=$(printf '%q' "$FM_HOME")
+fm_delivery_contract "$MODE" "$ID"
+IFS= read -r -d '' FOLLOWUP <<EOF || true
+Your scout Setup, Rules, and Definition of done are replaced by this ship contract.
+Review the scratch state with \`git status\` and \`git log\`, reset to a clean default-branch base, carry over only the intended fix changes, and create branch \`fm/$ID\`.
+$FM_DELIVERY_SETUP
+
+# Rules
+$FM_DELIVERY_RULE1
+
+$FM_DELIVERY_DOD
+EOF
+FOLLOWUP=${FOLLOWUP%$'\n'}
+FOLLOWUP_Q=$(printf '%q' "$FOLLOWUP")
 echo "promoted $ID to ship mode=$MODE yolo=$YOLO (teardown protection restored)"
-echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID '<ship instructions for mode=$MODE: review scratch state with git status and git log; reset to a clean default-branch base; carry over only intended fix changes; create branch fm/$ID; implement; report done>'"
+echo "next: FM_HOME=$HOME_Q bin/fm-send.sh fm-$ID $FOLLOWUP_Q"

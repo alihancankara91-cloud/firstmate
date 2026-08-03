@@ -69,8 +69,8 @@ fm_procevent_any_registered() {
 
 # --- ownership --------------------------------------------------------------
 # A claim is a private file recording the home, runner pid, claim generation,
-# and process identity. Registration and every ownership transition are
-# serialized at one source boundary.
+# process identity, and terminal registration cutoff. Registration and every
+# ownership transition are serialized at one source boundary.
 
 fm_procevent_claim_path() {
   printf '%s/%s.claim\n' "$(fm_procevent_claim_root)" "$1"
@@ -78,6 +78,41 @@ fm_procevent_claim_path() {
 
 fm_procevent_source_lock_path() {
   printf '%s/%s.lock\n' "$(fm_procevent_claim_root)" "$1"
+}
+
+fm_procevent_generation_path() {
+  printf '%s/%s.generation\n' "$(fm_procevent_claim_root)" "$1"
+}
+
+fm_procevent_registration_generation() {  # <registration>
+  local generation
+  generation=$(sed -n 's/^generation=//p' "$1" 2>/dev/null | head -1)
+  case "$generation" in
+    '') generation=0 ;;
+    *[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$generation"
+}
+
+fm_procevent_next_generation_locked() {  # <source-id>
+  local path current next root tmp
+  path=$(fm_procevent_generation_path "$1")
+  current=$(cat "$path" 2>/dev/null || true)
+  case "$current" in
+    '') current=0 ;;
+    *[!0-9]*) return 1 ;;
+  esac
+  next=$((current + 1))
+  root=$(fm_procevent_claim_root)
+  tmp=$(umask 077; mktemp "$root/.generation.XXXXXX") || return 1
+  if printf '%s\n' "$next" > "$tmp" \
+    && chmod 0600 "$tmp" \
+    && mv -f -- "$tmp" "$path"; then
+    printf '%s\n' "$next"
+    return 0
+  fi
+  rm -f -- "$tmp"
+  return 1
 }
 
 fm_procevent_source_lock_acquire() {
@@ -94,7 +129,7 @@ fm_procevent_source_lock_release() {
 }
 
 fm_procevent_claim_load_locked() {  # <source-id>
-  local claim home pid token identity reg_dir reg_identity terminal extra
+  local claim home pid token identity reg_dir reg_identity terminal terminal_generation extra
   claim=$(fm_procevent_claim_path "$1")
   [ -f "$claim" ] && [ ! -L "$claim" ] || return 1
   {
@@ -105,6 +140,7 @@ fm_procevent_claim_load_locked() {  # <source-id>
       && { IFS= read -r reg_dir || reg_dir=; } \
       && { IFS= read -r reg_identity || reg_identity=; } \
       && { IFS= read -r terminal || terminal=active; } \
+      && { IFS= read -r terminal_generation || terminal_generation=0; } \
       && ! IFS= read -r extra
   } < "$claim" || return 1
   [ -n "$home" ] || return 1
@@ -114,6 +150,7 @@ fm_procevent_claim_load_locked() {  # <source-id>
   case "$reg_dir" in ''|/*) ;; *) return 1 ;; esac
   case "$reg_identity" in ''|*:* ) ;; *) return 1 ;; esac
   case "$terminal" in active|terminal) ;; *) return 1 ;; esac
+  case "$terminal_generation" in ''|*[!0-9]*) return 1 ;; esac
   FM_PROCEVENT_CLAIM_HOME=$home
   FM_PROCEVENT_CLAIM_PID=$pid
   FM_PROCEVENT_CLAIM_TOKEN=$token
@@ -121,6 +158,7 @@ fm_procevent_claim_load_locked() {  # <source-id>
   FM_PROCEVENT_CLAIM_REG_DIR=$reg_dir
   FM_PROCEVENT_CLAIM_REG_IDENTITY=$reg_identity
   FM_PROCEVENT_CLAIM_TERMINAL=$terminal
+  FM_PROCEVENT_CLAIM_TERMINAL_GENERATION=$terminal_generation
 }
 
 # fm_procevent_group_alive <pid>
@@ -161,14 +199,15 @@ fm_procevent_pid_state() {
 # <source-id>: 0 live, 1 stale/absent, 2 uncertain, 3 leader gone with its owned
 # process group still alive, 4 terminal retirement pending.
 fm_procevent_claim_state_locked() {
-  local claim registration current_identity
+  local claim registration=${2-} current_generation
   claim=$(fm_procevent_claim_path "$1")
   [ -e "$claim" ] || return 1
   fm_procevent_claim_load_locked "$1" || return 2
-  if [ "$FM_PROCEVENT_CLAIM_TERMINAL" = terminal ] && [ -n "$FM_PROCEVENT_CLAIM_REG_IDENTITY" ]; then
-    registration="$FM_PROCEVENT_CLAIM_REG_DIR/$1.source"
-    current_identity=$(fm_pr_file_identity "$registration" 2>/dev/null || true)
-    [ "$current_identity" = "$FM_PROCEVENT_CLAIM_REG_IDENTITY" ] && return 4
+  if [ "$FM_PROCEVENT_CLAIM_TERMINAL" = terminal ]; then
+    [ -n "$registration" ] || return 4
+    current_generation=$(fm_procevent_registration_generation "$registration" 2>/dev/null) || return 2
+    [ "$current_generation" -gt "$FM_PROCEVENT_CLAIM_TERMINAL_GENERATION" ] && return 1
+    return 4
   fi
   fm_procevent_pid_state "$FM_PROCEVENT_CLAIM_PID" "$FM_PROCEVENT_CLAIM_IDENTITY"
 }
@@ -187,7 +226,7 @@ fm_procevent_claim_acquire_locked() {
   claim=$(fm_procevent_claim_path "$id")
   status=0
   if [ -e "$claim" ] || [ -L "$claim" ]; then
-    fm_procevent_claim_state_locked "$id"
+    fm_procevent_claim_state_locked "$id" "$registration"
     claim_state=$?
     case "$claim_state" in
       0|2|3|4) status=2 ;;
@@ -227,7 +266,7 @@ fm_procevent_claim_acquire_locked() {
   fi
   if [ "$status" -eq 0 ]; then
     token=${tmp##*/}-$pid
-    printf '%s\n%s\n%s\n%s\n%s\n%s\nactive\n' \
+    printf '%s\n%s\n%s\n%s\n%s\n%s\nactive\n0\n' \
       "$home" "$pid" "$token" "$identity" "$reg_dir" "$reg_identity" > "$tmp" || status=1
     [ "$status" -ne 0 ] || chmod 0600 "$tmp" || status=1
     [ "$status" -ne 0 ] || mv -f -- "$tmp" "$claim" || status=1
@@ -242,7 +281,7 @@ fm_procevent_claim_acquire_locked() {
 }
 
 fm_procevent_claim_mark_terminal_locked() {
-  local id=$1 home=$2 pid=$3 token=$4 claim root tmp
+  local id=$1 home=$2 pid=$3 token=$4 claim root tmp terminal_generation
   claim=$(fm_procevent_claim_path "$id")
   fm_procevent_claim_load_locked "$id" \
     && [ "$FM_PROCEVENT_CLAIM_HOME" = "$home" ] \
@@ -250,11 +289,13 @@ fm_procevent_claim_mark_terminal_locked() {
     && [ "$FM_PROCEVENT_CLAIM_TOKEN" = "$token" ] \
     && [ -n "$FM_PROCEVENT_CLAIM_REG_IDENTITY" ] || return 1
   root=$(fm_procevent_claim_root)
+  terminal_generation=$(cat "$(fm_procevent_generation_path "$id")" 2>/dev/null || true)
+  case "$terminal_generation" in ''|*[!0-9]*) return 1 ;; esac
   tmp=$(umask 077; mktemp "$root/.claim.XXXXXX") || return 1
-  if printf '%s\n%s\n%s\n%s\n%s\n%s\nterminal\n' \
+  if printf '%s\n%s\n%s\n%s\n%s\n%s\nterminal\n%s\n' \
     "$FM_PROCEVENT_CLAIM_HOME" "$FM_PROCEVENT_CLAIM_PID" "$FM_PROCEVENT_CLAIM_TOKEN" \
     "$FM_PROCEVENT_CLAIM_IDENTITY" "$FM_PROCEVENT_CLAIM_REG_DIR" \
-    "$FM_PROCEVENT_CLAIM_REG_IDENTITY" > "$tmp" \
+    "$FM_PROCEVENT_CLAIM_REG_IDENTITY" "$terminal_generation" > "$tmp" \
     && chmod 0600 "$tmp" \
     && mv -f -- "$tmp" "$claim"; then
     return 0
