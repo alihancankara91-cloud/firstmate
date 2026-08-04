@@ -77,3 +77,4 @@
 - After changing shared classifier helpers, inspect an early watcher-suite failure's isolated log before attributing it to the targeted heartbeat path.
 - Watcher tests need to isolate browser-reaper startup work globally instead of lengthening each wake assertion independently.
 - Extracted Bash tests executed from stdin must rewrite `BASH_SOURCE`-relative helper loads to absolute paths under `set -u`.
+- Watcher fixtures must wait for an observable scan-state transition instead of assuming startup maintenance will finish inside a short wall-clock liveness window.
