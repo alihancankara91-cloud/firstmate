@@ -126,6 +126,31 @@ mark_surfaced() {  # <status-file>
   mark_surfaced_event "$task" "$identity" "$last"
 }
 
+mark_signal_surfaced() {  # <status-or-turn-ended-file>
+  local f=$1 base task statusf decisions_only=0 eventf event_task event_id event_line
+  base=$(basename "$f")
+  case "$base" in
+    *.status)
+      task=${base%.status}
+      statusf=$f
+      ;;
+    *.turn-ended)
+      task=${base%.turn-ended}
+      statusf=${f%/*}/$task.status
+      decisions_only=1
+      ;;
+    *) return 0 ;;
+  esac
+  [ -f "$statusf" ] && [ ! -L "$statusf" ] || return 0
+  while IFS=$(printf '\t') read -r eventf event_task event_id event_line; do
+    [ "$eventf" = "$statusf" ] || continue
+    if [ "$decisions_only" -eq 1 ]; then
+      case "$event_id" in decision:*) ;; *) continue ;; esac
+    fi
+    mark_surfaced_event "$event_task" "$event_id" "$event_line"
+  done < <(scan_captain_relevant_statuses "${statusf%/*}")
+}
+
 # Act on a fresh actionable transition from a push-capable backend.
 handle_push_transition() {  # <backend> <session> <record>
   local backend=$1 session=$2 record=$3 pane_id to window task reason

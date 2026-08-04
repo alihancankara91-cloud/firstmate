@@ -969,7 +969,7 @@ EOF
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         printf '%s' "$sig" > "$sf"
-        mark_surfaced "$f"
+        mark_signal_surfaced "$f"
       done <<EOF
 $pending
 EOF

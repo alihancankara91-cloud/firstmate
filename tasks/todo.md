@@ -14,6 +14,13 @@
 - [x] Add signal and catch-all migration and deduplication coverage.
 - [x] Run one focused verification.
 
+# Signal fold marker review
+
+- [x] Reproduce and validate folded-decision re-emission after a signal batch.
+- [x] Mark every status event exposed by an actionable signal relay.
+- [x] Cover zero additional decision surfaces after unrelated progress.
+- [x] Run one focused verification.
+
 - [x] Reproduce all four current CI check failures through their exact local entry points.
 - [x] Identify the earliest shared divergence in fixtures or runtime behavior.
 - [x] Apply the smallest cross-platform root-cause fix.

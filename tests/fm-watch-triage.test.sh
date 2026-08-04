@@ -64,13 +64,13 @@ wait_numeric_file() {
   return 1
 }
 
-wait_positive_file() {
-  local file=$1 limit=${2:-30} i=0 value
+wait_numeric_at_least() {
+  local file=$1 minimum=$2 limit=${3:-30} i=0 value
   while [ "$i" -lt "$limit" ]; do
     value=$(cat "$file" 2>/dev/null || true)
     case "$value" in
-      ''|*[!0-9]*|0) ;;
-      *) return 0 ;;
+      ''|*[!0-9]*) ;;
+      *) [ "$value" -ge "$minimum" ] && return 0 ;;
     esac
     sleep 0.1
     i=$((i + 1))
@@ -1782,32 +1782,36 @@ test_heartbeat_backstop_promotes_missed_escalation_to_signal() {
   pass "heartbeat backstop promotes missed decisions to exact-content signal relays"
 }
 
-test_heartbeat_keeps_surfaced_open_decision_quiet_after_progress() {
+test_signal_batch_keeps_folded_decision_quiet_after_progress() {
   local dir state fakebin first_out second_out drain_out status_file pid sig
-  dir=$(make_case heartbeat-open-decision-dedup); state="$dir/state"; fakebin="$dir/fakebin"
+  dir=$(make_case signal-folded-decision-dedup); state="$dir/state"; fakebin="$dir/fakebin"
   first_out="$dir/first-watch.out"; second_out="$dir/second-watch.out"; drain_out="$dir/drain.out"
   status_file="$state/task.status"
   touch "$state/.last-check"
-  printf 'needs-decision:pick A\n' > "$status_file"
+  printf 'needs-decision [key=route]: pick A\ndone: report ready\n' > "$status_file"
   watch_bg "$state" "$fakebin" "$first_out"
   pid=$!
-  wait_for_exit "$pid" 40 || fail "initial legacy decision did not surface"
-  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "initial legacy decision drain failed"
-  grep -F "$(printf 'decision:default:1\tneeds-decision:pick A')" "$state/.hb-surfaced-task" >/dev/null \
-    || fail "legacy decision marker normalized or omitted its event identity"
+  wait_for_exit "$pid" 40 || fail "signal batch with a folded decision did not surface"
+  grep -F 'fm-escalation-v1:task:route:needs-decision:' "$first_out" >/dev/null \
+    || fail "signal batch omitted the folded decision"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "folded decision signal drain failed"
+  grep -F "$(printf 'decision:route:1\tneeds-decision [key=route]: pick A')" "$state/.hb-surfaced-task" >/dev/null \
+    || fail "signal batch did not mark its folded decision as surfaced"
+  grep -F "$(printf 'line:2\tdone: report ready')" "$state/.hb-surfaced-task" >/dev/null \
+    || fail "signal batch did not mark its terminal event as surfaced"
 
   printf 'working: benign progress\n' >> "$status_file"
   sig=$(seen_sig "$status_file"); printf '%s' "$sig" > "$state/.seen-task_status"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$second_out" &
   pid=$!
-  if ! wait_positive_file "$state/.heartbeat-streak" 100; then
+  if ! wait_numeric_at_least "$state/.heartbeat-streak" 2 150; then
     reap "$pid"; fail "later progress caused the surfaced open decision to re-fire: $(cat "$second_out")"
   fi
   [ ! -s "$second_out" ] || { reap "$pid"; fail "quiet heartbeat printed a repeated decision wake"; }
   [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "quiet heartbeat queued a repeated decision wake"; }
   reap "$pid"
-  pass "surfaced open decisions stay quiet after unrelated progress"
+  pass "signal batches mark folded decisions and later heartbeats stay quiet"
 }
 
 # --- beacon stays fresh while absorbing -------------------------------------
@@ -1944,7 +1948,7 @@ test_procevent_marker_failure_exits_and_replays
 test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
 test_heartbeat_backstop_promotes_missed_escalation_to_signal
-test_heartbeat_keeps_surfaced_open_decision_quiet_after_progress
+test_signal_batch_keeps_folded_decision_quiet_after_progress
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale
