@@ -524,25 +524,9 @@ sync_pause_markers_from_signal() {  # <state> <signal files>
 # A line-only marker is accepted only as a legacy record; all markers written by
 # this version carry the event identity needed to distinguish reopened decisions.
 status_seen_matches() {  # <state> <task> <event-id> <event-line>
-  local state=$1 task=$2 identity=$3 line=$4 marker marker_text seen_id seen_line
-  marker="$state/.subsuper-seen-status-$(_stale_key "$task")"
-  [ -f "$marker" ] || return 1
-  marker_text=$(cat "$marker" 2>/dev/null || true)
-  case "$marker_text" in
-    *$'\n'*|*$'\t'*) ;;
-    *)
-      case "$(status_line_verb "$line")" in
-        needs-decision|blocked) return 1 ;;
-      esac
-      [ "$marker_text" = "$line" ] && return 0
-      return 1
-      ;;
-  esac
-  [ -n "$identity" ] || return 1
-  while IFS=$'\t' read -r seen_id seen_line; do
-    [ "$seen_id" = "$identity" ] && [ "$seen_line" = "$line" ] && return 0
-  done < "$marker"
-  return 1
+  local state=$1 task=$2 identity=$3 line=$4
+  status_event_marker_matches \
+    "$state/.subsuper-seen-status-$(_stale_key "$task")" "$identity" "$line"
 }
 
 # Record one surfaced event in the single per-task seen marker. The marker is a
@@ -551,8 +535,7 @@ mark_status_seen() {  # <state> <task> <last-line> [<event-id>]
   local state=$1 task=$2 line=$3 identity=${4:-} marker
   marker="$state/.subsuper-seen-status-$(_stale_key "$task")"
   if [ -n "$identity" ]; then
-    status_seen_matches "$state" "$task" "$identity" "$line" && return 0
-    printf '%s\t%s\n' "$identity" "$line" >> "$marker"
+    status_event_marker_add "$marker" "$identity" "$line"
   else
     printf '%s' "$line" > "$marker"
   fi

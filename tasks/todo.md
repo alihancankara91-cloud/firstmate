@@ -1,5 +1,12 @@
 # CI behavior failure fixes
 
+# Away catch-all review fixes
+
+- [x] Reproduce and validate watcher identity and legacy normalization findings.
+- [x] Preserve raw opening events and watcher event identities.
+- [x] Add regression coverage for both deduplication paths.
+- [x] Run one focused verification.
+
 - [x] Reproduce all four current CI check failures through their exact local entry points.
 - [x] Identify the earliest shared divergence in fixtures or runtime behavior.
 - [x] Apply the smallest cross-platform root-cause fix.

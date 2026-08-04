@@ -267,7 +267,7 @@ _fm_status_open_decision_events_stream() {  # <status-file>
         note=$(status_line_note "$line")
         open=$(_fm_decision_drop "$open" "$key")
         [ -n "$open" ] && open="${open}"$'\n'
-        open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\t'"${line_no}"$'\n'
+        open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\t'"${line_no}"$'\t'"${line}"$'\n'
         ;;
       "$resolve"|"$held")
         open=$(_fm_decision_drop "$open" "$key")
@@ -279,7 +279,7 @@ _fm_status_open_decision_events_stream() {  # <status-file>
 }
 
 # Print the still-open decision events as TAB-separated
-# "<key>\t<verb>\t<summary>\t<opening-line>" rows.
+# "<key>\t<verb>\t<summary>\t<opening-line>\t<opening-event>" rows.
 status_open_decision_events() {  # <status-file>
   _fm_status_open_decision_events_stream "$1"
 }
@@ -289,8 +289,8 @@ status_open_decision_events() {  # <status-file>
 # fleet snapshot and every point-in-time consumer must use instead of trusting the
 # last status line.
 status_open_decisions() {  # <status-file>
-  local f=$1 key verb note line_no
-  while IFS=$'\t' read -r key verb note line_no; do
+  local f=$1 key verb note line_no event_line
+  while IFS=$'\t' read -r key verb note line_no event_line; do
     [ -n "$key" ] || continue
     printf '%s\t%s\t%s\n' "$key" "$verb" "$note"
   done <<EOF
@@ -337,6 +337,38 @@ status_current_event_identity() {  # <status-file>
   line_no=${info%%$'\t'*}
   line=${info#*$'\t'}
   status_event_identity "$line_no" "$line"
+}
+
+status_event_marker_matches() {  # <marker> <event-id> <event-line>
+  local marker=$1 identity=$2 line=$3 marker_text seen_id seen_line
+  [ -f "$marker" ] || return 1
+  marker_text=$(cat "$marker" 2>/dev/null || true)
+  case "$marker_text" in
+    *$'\n'*|*$'\t'*) ;;
+    *)
+      case "$(status_line_verb "$line")" in
+        needs-decision|blocked) return 1 ;;
+      esac
+      [ "$marker_text" = "$line" ] && return 0
+      return 1
+      ;;
+  esac
+  [ -n "$identity" ] || return 1
+  while IFS=$'\t' read -r seen_id seen_line; do
+    [ "$seen_id" = "$identity" ] && [ "$seen_line" = "$line" ] && return 0
+  done < "$marker"
+  return 1
+}
+
+status_event_marker_add() {  # <marker> <event-id> <event-line>
+  local marker=$1 identity=$2 line=$3 marker_text
+  status_event_marker_matches "$marker" "$identity" "$line" && return 0
+  marker_text=$(cat "$marker" 2>/dev/null || true)
+  case "$marker_text" in
+    ''|*$'\t'*) ;;
+    *) : > "$marker" ;;
+  esac
+  printf '%s\t%s\n' "$identity" "$line" >> "$marker"
 }
 
 # Encode one escalation into the watcher reason without exposing a status path as
@@ -587,14 +619,9 @@ scan_captain_relevant_statuses() {  # <state>
     task=$(basename "$f"); task="${task%.status}"
     open_ids=''
     open=$(status_open_decision_events "$f")
-    while IFS=$'\t' read -r key verb note line_no; do
+    while IFS=$'\t' read -r key verb note line_no event_line; do
       [ -n "$key" ] || continue
       event_id="decision:${key}:${line_no}"
-      if [ "$key" = default ]; then
-        event_line="${verb}: ${note}"
-      else
-        event_line="${verb} [key=${key}]: ${note}"
-      fi
       printf '%s\t%s\t%s\t%s\n' "$f" "$task" "$event_id" "$event_line"
       open_ids="${open_ids}|${event_id}|"
     done <<EOF

@@ -64,6 +64,20 @@ wait_numeric_file() {
   return 1
 }
 
+wait_positive_file() {
+  local file=$1 limit=${2:-30} i=0 value
+  while [ "$i" -lt "$limit" ]; do
+    value=$(cat "$file" 2>/dev/null || true)
+    case "$value" in
+      ''|*[!0-9]*|0) ;;
+      *) return 0 ;;
+    esac
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # Portable mtime in epoch seconds. Platform-detected, never the `stat -f || stat -c`
 # fallback (which writes a partial filesystem dump on Linux; see fm-watch.sh).
 file_mtime() {
@@ -443,7 +457,8 @@ test_actionable_signal_surfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the actionable signal failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "fm-escalation-v1:task:default:needs-decision:$encoded" >/dev/null \
     || fail "legacy decision queue row lost its exact content"
-  [ -s "$state/.hb-surfaced-task" ] || fail "actionable signal did not record the surfaced marker"
+  grep -F "$(printf 'decision:default:2\tneeds-decision: pick A or B')" "$state/.hb-surfaced-task" >/dev/null \
+    || fail "actionable signal did not record the surfaced event identity"
   pass "captain-relevant signal is surfaced (queue + exit) and marked surfaced"
 }
 
@@ -1736,7 +1751,7 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
   wait_for_exit "$pid" 40 || fail "heartbeat backstop did not surface an unsurfaced captain-relevant status"
   grep -Fx "heartbeat" "$out" >/dev/null || fail "backstop did not exit with a heartbeat wake"
   grep -F "fm-escalation-v1:" "$out" >/dev/null && fail "ordinary done heartbeat became a captain escalation relay"
-  [ "$(cat "$state/.hb-surfaced-miss" 2>/dev/null || true)" = "done: PR https://example.test/pr/5" ] \
+  grep -F "$(printf 'line:1\tdone: PR https://example.test/pr/5')" "$state/.hb-surfaced-miss" >/dev/null \
     || fail "backstop did not record the status as surfaced (would re-fire next heartbeat)"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the backstop heartbeat failed"
   grep "$(printf '\theartbeat\t')" "$drain_out" >/dev/null || fail "backstop heartbeat was not queued"
@@ -1765,6 +1780,34 @@ test_heartbeat_backstop_promotes_missed_escalation_to_signal() {
   grep "$(printf '\theartbeat\t')" "$drain_out" >/dev/null \
     && fail "heartbeat-promoted escalation also queued an ordinary heartbeat"
   pass "heartbeat backstop promotes missed decisions to exact-content signal relays"
+}
+
+test_heartbeat_keeps_surfaced_open_decision_quiet_after_progress() {
+  local dir state fakebin first_out second_out drain_out status_file pid sig
+  dir=$(make_case heartbeat-open-decision-dedup); state="$dir/state"; fakebin="$dir/fakebin"
+  first_out="$dir/first-watch.out"; second_out="$dir/second-watch.out"; drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+  touch "$state/.last-check"
+  printf 'needs-decision:pick A\n' > "$status_file"
+  watch_bg "$state" "$fakebin" "$first_out"
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "initial legacy decision did not surface"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "initial legacy decision drain failed"
+  grep -F "$(printf 'decision:default:1\tneeds-decision:pick A')" "$state/.hb-surfaced-task" >/dev/null \
+    || fail "legacy decision marker normalized or omitted its event identity"
+
+  printf 'working: benign progress\n' >> "$status_file"
+  sig=$(seen_sig "$status_file"); printf '%s' "$sig" > "$state/.seen-task_status"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$second_out" &
+  pid=$!
+  if ! wait_positive_file "$state/.heartbeat-streak" 100; then
+    reap "$pid"; fail "later progress caused the surfaced open decision to re-fire: $(cat "$second_out")"
+  fi
+  [ ! -s "$second_out" ] || { reap "$pid"; fail "quiet heartbeat printed a repeated decision wake"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "quiet heartbeat queued a repeated decision wake"; }
+  reap "$pid"
+  pass "surfaced open decisions stay quiet after unrelated progress"
 }
 
 # --- beacon stays fresh while absorbing -------------------------------------
@@ -1901,6 +1944,7 @@ test_procevent_marker_failure_exits_and_replays
 test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
 test_heartbeat_backstop_promotes_missed_escalation_to_signal
+test_heartbeat_keeps_surfaced_open_decision_quiet_after_progress
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale

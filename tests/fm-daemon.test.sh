@@ -710,6 +710,22 @@ test_catchall_decision_event_fold_and_reopen() {
   pass "catch-all folds decisions, suppresses repeats, honors captain-held, reopens, and preserves terminal events"
 }
 
+test_catchall_matches_legacy_decision_raw_event() {
+  local dir state status identity line
+  dir=$(make_supercase catchall-legacy-raw-event)
+  state="$dir/state"
+  status="$state/legacy.status"
+  line='needs-decision:pick A'
+  printf '%s\nworking: benign progress\n' "$line" > "$status"
+  identity='decision:default:1'
+  mark_status_seen "$state" legacy "$line" "$identity"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "catch-all normalized and re-emitted an already surfaced legacy decision"
+  pass "catch-all preserves legacy decision event bytes for deduplication"
+}
+
 test_catchall_repeated_scan_injects_once() {
   local dir state fakebin sent capture status
   dir=$(make_supercase catchall-injection)
@@ -1962,6 +1978,7 @@ test_escalate_batches_into_one_digest
 test_escalate_batch_age_uses_first_append
 test_heartbeat_scan_dedup
 test_catchall_decision_event_fold_and_reopen
+test_catchall_matches_legacy_decision_raw_event
 test_catchall_repeated_scan_injects_once
 test_silent_wakes_never_inject
 test_handle_wake_routes_self_and_escalate

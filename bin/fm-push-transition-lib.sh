@@ -106,14 +106,24 @@ _hb_surfaced_path() {
   printf '%s/.hb-surfaced-%s' "$STATE" "$(printf '%s' "$1" | tr ':/.' '___')"
 }
 
+hb_surfaced_matches() {  # <task> <event-id> <event-line>
+  status_event_marker_matches "$(_hb_surfaced_path "$1")" "$2" "$3"
+}
+
+mark_surfaced_event() {  # <task> <event-id> <event-line>
+  status_event_marker_add "$(_hb_surfaced_path "$1")" "$2" "$3"
+}
+
 # Record a captain-relevant status after its durable wake has been enqueued.
 mark_surfaced() {  # <status-file>
-  local f=$1 task last
+  local f=$1 task last identity
   task=$(basename "$f"); task="${task%.status}"
   last=$(last_status_line "$f")
   [ -n "$last" ] || return 0
   status_is_captain_relevant "$last" || return 0
-  printf '%s' "$last" > "$(_hb_surfaced_path "$task")"
+  identity=$(status_current_event_identity "$f" 2>/dev/null || true)
+  [ -n "$identity" ] || return 0
+  mark_surfaced_event "$task" "$identity" "$last"
 }
 
 # Act on a fresh actionable transition from a push-capable backend.
