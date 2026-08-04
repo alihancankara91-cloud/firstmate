@@ -233,7 +233,7 @@ status_escalation_is_structured() {  # <status-line>
   case "$first$second$third" in *$'\t'*|*$'\n'*|*' | '*) return 1 ;; esac
   return 0
 }
-# Drop the record for <key> from a newline-terminated "<key>\t<verb>\t<note>" set.
+# Drop the record for <key> from a newline-terminated keyed event set.
 # Portable (no associative arrays) so the fold runs on bash 3.2 as well as 4+.
 _fm_decision_drop() {  # <open-set> <key>
   local set=$1 key=$2 line out=''
@@ -248,18 +248,16 @@ $set
 EOF
   printf '%s' "$out"
 }
-# Fold the WHOLE status stream into the set of decisions still open. Prints one
-# TAB-separated "<key>\t<verb>\t<summary>" line per still-open decision, in
-# most-recently-opened-last order; prints nothing when none are open. Pure read of
-# the file, no globals beyond the optional FM_CLASSIFY_RESOLVE_VERB override. This
-# is the durable open-set the fleet snapshot and any point-in-time consumer must use
-# instead of trusting the last status line.
-status_open_decisions() {  # <status-file>
-  local f=$1 line verb key note resolve held open='' stripped
+# Fold the WHOLE status stream into the set of decisions still open. The event
+# variant retains the opening line number so a reopened decision with identical
+# text is a new event rather than a duplicate of its earlier occurrence.
+_fm_status_open_decision_events_stream() {  # <status-file>
+  local f=$1 line verb key note resolve held open='' stripped line_no=0
   [ -f "$f" ] || return 0
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
   while IFS= read -r line || [ -n "$line" ]; do
+    line_no=$((line_no + 1))
     stripped=${line//[[:space:]]/}
     [ -n "$stripped" ] || continue
     verb=$(status_line_verb "$line")
@@ -269,7 +267,7 @@ status_open_decisions() {  # <status-file>
         note=$(status_line_note "$line")
         open=$(_fm_decision_drop "$open" "$key")
         [ -n "$open" ] && open="${open}"$'\n'
-        open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\n'
+        open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\t'"${line_no}"$'\n'
         ;;
       "$resolve"|"$held")
         open=$(_fm_decision_drop "$open" "$key")
@@ -278,6 +276,67 @@ status_open_decisions() {  # <status-file>
     esac
   done < "$f"
   printf '%s' "$open"
+}
+
+# Print the still-open decision events as TAB-separated
+# "<key>\t<verb>\t<summary>\t<opening-line>" rows.
+status_open_decision_events() {  # <status-file>
+  _fm_status_open_decision_events_stream "$1"
+}
+
+# Print one TAB-separated "<key>\t<verb>\t<summary>" row per still-open
+# decision, in most-recently-opened-last order. This is the durable open-set the
+# fleet snapshot and every point-in-time consumer must use instead of trusting the
+# last status line.
+status_open_decisions() {  # <status-file>
+  local f=$1 key verb note line_no
+  while IFS=$'\t' read -r key verb note line_no; do
+    [ -n "$key" ] || continue
+    printf '%s\t%s\t%s\n' "$key" "$verb" "$note"
+  done <<EOF
+$(status_open_decision_events "$f")
+EOF
+}
+
+# Print the last non-blank status event as "<physical-line>\t<line>".
+status_last_event_info() {  # <status-file>
+  local f=$1 line line_no=0 last='' last_no=0 stripped
+  [ -f "$f" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line_no=$((line_no + 1))
+    stripped=${line//[[:space:]]/}
+    [ -n "$stripped" ] || continue
+    last=$line
+    last_no=$line_no
+  done < "$f"
+  [ "$last_no" -gt 0 ] || return 0
+  printf '%s\t%s' "$last_no" "$last"
+}
+
+# Print a stable identity for one status event. Decision identities include the
+# keyed opening line, while terminal and legacy identities include their physical
+# line. This distinguishes a reopened decision even when its text is unchanged.
+status_event_identity() {  # <physical-line> <status-line>
+  local line_no=$1 line=$2 verb key
+  verb=$(status_line_verb "$line")
+  case "$verb" in
+    needs-decision|blocked)
+      key=$(_fm_decision_key "$line") || { printf 'line:%s' "$line_no"; return 0; }
+      printf 'decision:%s:%s' "$key" "$line_no"
+      ;;
+    *) printf 'line:%s' "$line_no" ;;
+  esac
+}
+
+# Print the identity of the current non-blank status event for per-wake
+# classification and its shared daemon dedup marker.
+status_current_event_identity() {  # <status-file>
+  local info line_no line
+  info=$(status_last_event_info "$1")
+  [ -n "$info" ] || return 1
+  line_no=${info%%$'\t'*}
+  line=${info#*$'\t'}
+  status_event_identity "$line_no" "$line"
 }
 
 # Encode one escalation into the watcher reason without exposing a status path as
@@ -512,19 +571,46 @@ stale_is_terminal() {  # <window> <state>
   [ -n "$last" ] && status_is_captain_relevant "$last"
 }
 
-# Print "<file>\t<task>\t<last-line>" for every state/*.status whose last line is
-# captain-relevant. This is the cheap fleet-scan both supervisors run as a
-# catch-all backstop for a captain-relevant status the per-wake path might miss.
+# Print "<file>\t<task>\t<event-id>\t<event-line>" for every captain-relevant
+# event represented by state/*.status. The whole-stream decision fold keeps an
+# unresolved decision visible behind unrelated later events, while a verified
+# resolution or captain-held transfer removes it before this scan. The current
+# terminal event is retained as a separate row so a new terminal event is never
+# hidden by an older unresolved decision.
 # No dedup is applied here: each consumer dedupes against its own seen-state (the
 # daemon against .subsuper-seen-status-*, the watcher against .seen-* signatures).
 scan_captain_relevant_statuses() {  # <state>
-  local state=$1 f last task
+  local state=$1 f task open key verb note line_no event_id event_line open_ids
+  local last_info last_no last
   for f in "$state"/*.status; do
     [ -e "$f" ] || continue
-    last=$(last_status_line "$f")
-    status_is_captain_relevant "$last" || continue
     task=$(basename "$f"); task="${task%.status}"
-    printf '%s\t%s\t%s\n' "$f" "$task" "$last"
+    open_ids=''
+    open=$(status_open_decision_events "$f")
+    while IFS=$'\t' read -r key verb note line_no; do
+      [ -n "$key" ] || continue
+      event_id="decision:${key}:${line_no}"
+      if [ "$key" = default ]; then
+        event_line="${verb}: ${note}"
+      else
+        event_line="${verb} [key=${key}]: ${note}"
+      fi
+      printf '%s\t%s\t%s\t%s\n' "$f" "$task" "$event_id" "$event_line"
+      open_ids="${open_ids}|${event_id}|"
+    done <<EOF
+$open
+EOF
+
+    last_info=$(status_last_event_info "$f")
+    [ -n "$last_info" ] || continue
+    last_no=${last_info%%$'\t'*}
+    last=${last_info#*$'\t'}
+    status_is_captain_relevant "$last" || continue
+    event_id=$(status_event_identity "$last_no" "$last")
+    case "$open_ids" in
+      *"|${event_id}|"*) : ;;
+      *) printf '%s\t%s\t%s\t%s\n' "$f" "$task" "${event_id}" "$last" ;;
+    esac
   done
   return 0
 }

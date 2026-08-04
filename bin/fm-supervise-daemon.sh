@@ -336,7 +336,7 @@ _collapse_newlines() {  # <text>
 # summary firstmate would otherwise have to re-read.
 
 classify_signal() {  # <reason-after-colon> <state>
-  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task seen
+  local reason=$1 state=$2 f last distilled="" rel="" all_seen=1 task identity
   for f in $reason; do
     [ -e "$f" ] || continue
     last=$(last_status_line "$f")
@@ -344,13 +344,13 @@ classify_signal() {  # <reason-after-colon> <state>
     distilled="${distilled}$(basename "$f"): ${last} | "
     status_is_captain_relevant "$last" || continue
     rel=1
-    # Dedupe against the catch-all scan: if this status was already escalated
-    # (seen marker matches), skip escalating again. The seen marker is the
-    # single source of truth shared between the per-wake signal path and the
-    # heartbeat scan. all_seen stays 1 only if EVERY relevant file was seen.
+    # Dedupe against the catch-all scan: if this status event was already
+    # escalated, skip escalating again. The marker identity includes the
+    # opening line for decisions, so a reopened decision with identical text is
+    # not mistaken for the earlier surfaced event.
     task=$(basename "$f"); task="${task%.status}"
-    seen="$state/.subsuper-seen-status-$(_stale_key "$task")"
-    [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ] || all_seen=0
+    identity=$(status_current_event_identity "$f" 2>/dev/null || true)
+    status_seen_matches "$state" "$task" "$identity" "$last" || all_seen=0
   done
   # strip a trailing " | " separator so the distilled line is clean
   distilled="${distilled% | }"
@@ -395,10 +395,11 @@ classify_stale() {  # <window> <state>
           ;;
       esac
     fi
-    # Dedupe against the signal path: if this status was already escalated
-    # (seen marker matches), self-handle to avoid a duplicate in the digest.
-    seen="$state/.subsuper-seen-status-$(_stale_key "$task")"
-    if [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ]; then
+    # Dedupe against the signal path: if this status event was already
+    # escalated, self-handle to avoid a duplicate in the digest.
+    local identity
+    identity=$(status_current_event_identity "$state/$task.status" 2>/dev/null || true)
+    if status_seen_matches "$state" "$task" "$identity" "$last"; then
       printf 'self|stale + terminal (already escalated by signal): %s' "$last"
       return
     fi
@@ -428,8 +429,8 @@ classify_unknown() {  # <reason>
 # --- stale marker + escalation buffer (stateful, but via explicit state dir) -
 # Marker:   state/.subsuper-stale-<key>   contains the epoch first seen idle.
 # Buffer:   state/.subsuper-escalations    one distilled line per escalation.
-# Seen:     state/.subsuper-seen-status-<task>  last status line the scan
-#           escalated, so the catch-all does not re-fire the same terminal.
+# Seen:     state/.subsuper-seen-status-<task>  one or more event-id/status-line
+#           records already surfaced, so a catch-all scan does not re-fire them.
 
 _stale_key() { printf '%s' "$1" | tr ':/.' '___'; }
 
@@ -519,20 +520,49 @@ sync_pause_markers_from_signal() {  # <state> <signal files>
   done
 }
 
-# Record the seen-status marker for a captain-relevant status line so the
-# heartbeat catch-all scan does not re-fire it. The single source of truth for
-# the .subsuper-seen-status-<task> dedup state: called from both the per-wake
-# escalate path and the catch-all scan.
-mark_status_seen() {  # <state> <task> <last-line>
-  local state=$1 task=$2 line=$3
-  printf '%s' "$line" > "$state/.subsuper-seen-status-$(_stale_key "$task")"
+# Return success when one event identity and line have already been surfaced.
+# A line-only marker is accepted only as a legacy record; all markers written by
+# this version carry the event identity needed to distinguish reopened decisions.
+status_seen_matches() {  # <state> <task> <event-id> <event-line>
+  local state=$1 task=$2 identity=$3 line=$4 marker marker_text seen_id seen_line
+  marker="$state/.subsuper-seen-status-$(_stale_key "$task")"
+  [ -f "$marker" ] || return 1
+  marker_text=$(cat "$marker" 2>/dev/null || true)
+  case "$marker_text" in
+    *$'\n'*|*$'\t'*) ;;
+    *)
+      case "$(status_line_verb "$line")" in
+        needs-decision|blocked) return 1 ;;
+      esac
+      [ "$marker_text" = "$line" ] && return 0
+      return 1
+      ;;
+  esac
+  [ -n "$identity" ] || return 1
+  while IFS=$'\t' read -r seen_id seen_line; do
+    [ "$seen_id" = "$identity" ] && [ "$seen_line" = "$line" ] && return 0
+  done < "$marker"
+  return 1
+}
+
+# Record one surfaced event in the single per-task seen marker. The marker is a
+# small set because a status stream may hold more than one distinct decision.
+mark_status_seen() {  # <state> <task> <last-line> [<event-id>]
+  local state=$1 task=$2 line=$3 identity=${4:-} marker
+  marker="$state/.subsuper-seen-status-$(_stale_key "$task")"
+  if [ -n "$identity" ]; then
+    status_seen_matches "$state" "$task" "$identity" "$line" && return 0
+    printf '%s\t%s\n' "$identity" "$line" >> "$marker"
+  else
+    printf '%s' "$line" > "$marker"
+  fi
 }
 
 # Mark every captain-relevant status line a per-wake classification escalated as
 # seen, so the catch-all scan does not re-escalate the same line within
 # HEARTBEAT_SCAN_SECS. Mirrors classify_signal/classify_stale's relevance test.
 mark_escalated_seen() {  # <kind> <arg> <state>
-  local kind=$1 arg=$2 state=$3 f last task
+  local kind=$1 arg=$2 state=$3 f last task identity
   case "$kind" in
     signal)
       for f in $arg; do
@@ -541,13 +571,16 @@ mark_escalated_seen() {  # <kind> <arg> <state>
         [ -n "$last" ] || continue
         status_is_captain_relevant "$last" || continue
         task=$(basename "$f"); task="${task%.status}"
-        mark_status_seen "$state" "$task" "$last"
+        identity=$(status_current_event_identity "$f" 2>/dev/null || true)
+        mark_status_seen "$state" "$task" "$last" "$identity"
       done ;;
     stale)
       task=$(window_to_task "$arg" "$state")
       last=$(last_status_line "$state/$task.status")
-      [ -n "$last" ] && status_is_captain_relevant "$last" \
-        && mark_status_seen "$state" "$task" "$last" ;;
+      if [ -n "$last" ] && status_is_captain_relevant "$last"; then
+        identity=$(status_current_event_identity "$state/$task.status" 2>/dev/null || true)
+        mark_status_seen "$state" "$task" "$last" "$identity"
+      fi ;;
   esac
 }
 
@@ -957,7 +990,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs event_id event_line
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
@@ -1063,13 +1096,11 @@ housekeeping() {  # <state>
   #     scan_captain_relevant_statuses; the daemon layers its digest dedup on top.
   if [ "$(_file_age "$state/.subsuper-last-scan")" -ge "${FM_HEARTBEAT_SCAN_SECS:-$HEARTBEAT_SCAN_SECS_DEFAULT}" ]; then
     _now > "$state/.subsuper-last-scan"
-    local seen
-    while IFS="$(printf '\t')" read -r f task last; do
+    while IFS="$(printf '\t')" read -r f task event_id event_line; do
       [ -n "$f" ] || continue
-      seen="$state/.subsuper-seen-status-$(_stale_key "$task")"
-      [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ] && continue
-      escalate_add "$state" "$(basename "$f"): $last (catch-all scan)"
-      mark_status_seen "$state" "$task" "$last"
+      status_seen_matches "$state" "$task" "$event_id" "$event_line" && continue
+      escalate_add "$state" "$(basename "$f"): $event_line (catch-all scan)"
+      mark_status_seen "$state" "$task" "$event_line" "$event_id"
     done < <(scan_captain_relevant_statuses "$state")
   fi
 }
