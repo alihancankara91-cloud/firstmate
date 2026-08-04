@@ -7,6 +7,13 @@
 - [x] Add regression coverage for both deduplication paths.
 - [x] Run one focused verification.
 
+# Legacy terminal marker review
+
+- [x] Reproduce and validate same-text terminal suppression by scalar markers.
+- [x] Make scalar markers non-authoritative until the next surfaced event.
+- [x] Add signal and catch-all migration and deduplication coverage.
+- [x] Run one focused verification.
+
 - [x] Reproduce all four current CI check failures through their exact local entry points.
 - [x] Identify the earliest shared divergence in fixtures or runtime behavior.
 - [x] Apply the smallest cross-platform root-cause fix.

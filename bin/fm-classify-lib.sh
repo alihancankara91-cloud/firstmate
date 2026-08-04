@@ -340,19 +340,8 @@ status_current_event_identity() {  # <status-file>
 }
 
 status_event_marker_matches() {  # <marker> <event-id> <event-line>
-  local marker=$1 identity=$2 line=$3 marker_text seen_id seen_line
+  local marker=$1 identity=$2 line=$3 seen_id seen_line
   [ -f "$marker" ] || return 1
-  marker_text=$(cat "$marker" 2>/dev/null || true)
-  case "$marker_text" in
-    *$'\n'*|*$'\t'*) ;;
-    *)
-      case "$(status_line_verb "$line")" in
-        needs-decision|blocked) return 1 ;;
-      esac
-      [ "$marker_text" = "$line" ] && return 0
-      return 1
-      ;;
-  esac
   [ -n "$identity" ] || return 1
   while IFS=$'\t' read -r seen_id seen_line; do
     [ "$seen_id" = "$identity" ] && [ "$seen_line" = "$line" ] && return 0
@@ -365,7 +354,7 @@ status_event_marker_add() {  # <marker> <event-id> <event-line>
   status_event_marker_matches "$marker" "$identity" "$line" && return 0
   marker_text=$(cat "$marker" 2>/dev/null || true)
   case "$marker_text" in
-    ''|*$'\t'*) ;;
+    ''|line:*$'\t'*|decision:*:*$'\t'*) ;;
     *) : > "$marker" ;;
   esac
   printf '%s\t%s\n' "$identity" "$line" >> "$marker"

@@ -521,8 +521,7 @@ sync_pause_markers_from_signal() {  # <state> <signal files>
 }
 
 # Return success when one event identity and line have already been surfaced.
-# A line-only marker is accepted only as a legacy record; all markers written by
-# this version carry the event identity needed to distinguish reopened decisions.
+# Legacy line-only markers are replaced after the next surfaced event.
 status_seen_matches() {  # <state> <task> <event-id> <event-line>
   local state=$1 task=$2 identity=$3 line=$4
   status_event_marker_matches \

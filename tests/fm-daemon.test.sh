@@ -162,7 +162,7 @@ test_stale_diagnostic_wedge_survives_busy_housekeeping() {
     key=$(printf '%s' "$task" | tr ':/.' '___')
     echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
     [ "$case_name" = prior-terminal ] \
-      && printf '%s' "$status_line" > "$state/.subsuper-seen-status-$key"
+      && mark_status_seen "$state" "$task" "$status_line" 'line:1'
     [ "$case_name" = paused ] \
       && echo $(( $(date +%s) - 500 )) > "$state/.subsuper-paused-$key"
 
@@ -645,6 +645,47 @@ test_heartbeat_scan_dedup() {
   pass "catch-all scan escalates a missed terminal once, not twice"
 }
 
+test_legacy_scalar_marker_surfaces_new_terminal_event() {
+  local dir state status marker catch_status catch_marker out
+  dir=$(make_supercase legacy-scalar-new-terminal)
+  state="$dir/state"
+  status="$state/task.status"
+  marker="$state/.subsuper-seen-status-task"
+  printf 'done: ready\ndone: ready\n' > "$status"
+  printf 'done: ready' > "$marker"
+
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$status" "$state")
+  case "$out" in
+    escalate\|*) ;;
+    *) fail "legacy scalar marker hid a same-text new terminal signal: $out" ;;
+  esac
+  [ "$(cat "$marker")" = 'done: ready' ] \
+    || fail "classification migrated the scalar marker before surfacing"
+
+  FM_STATE_OVERRIDE="$state" handle_wake "signal: $status" "$state"
+  grep -F "$(printf 'line:2\tdone: ready')" "$marker" >/dev/null \
+    || fail "surfaced terminal did not migrate the scalar marker to its event identity"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$status" "$state")
+  case "$out" in
+    self\|*) ;;
+    *) fail "identified terminal event was not deduplicated after migration: $out" ;;
+  esac
+
+  catch_status="$state/catch.status"
+  catch_marker="$state/.subsuper-seen-status-catch"
+  printf 'done: catch-all ready\ndone: catch-all ready\n' > "$catch_status"
+  printf 'done: catch-all ready' > "$catch_marker"
+  : > "$state/.subsuper-escalations"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  grep -F 'catch.status: done: catch-all ready' "$state/.subsuper-escalations" >/dev/null \
+    || fail "legacy scalar marker hid a same-text new terminal catch-all event"
+  grep -F "$(printf 'line:2\tdone: catch-all ready')" "$catch_marker" >/dev/null \
+    || fail "catch-all surface did not migrate the scalar marker to its event identity"
+  pass "legacy scalar markers surface new signal and catch-all terminals before migration"
+}
+
 test_catchall_decision_event_fold_and_reopen() {
   local dir state status line
   dir=$(make_supercase catchall-decision-fold)
@@ -1090,7 +1131,7 @@ test_classify_signal_dedup_against_scan() {
   printf 'done: PR https://x/y/pull/9\n' > "$state/dup-s9.status"
   # Simulate the catch-all scan having already escalated this status.
   key=$(printf '%s' "dup-s9" | tr ':/.' '___')
-  printf 'done: PR https://x/y/pull/9' > "$state/.subsuper-seen-status-$key"
+  mark_status_seen "$state" dup-s9 'done: PR https://x/y/pull/9' 'line:1'
   out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/dup-s9.status" "$state")
   case "$out" in self\|*) ;; *) fail "signal not deduped against scan: $out" ;; esac
   # Without the seen marker, it should escalate.
@@ -1108,7 +1149,7 @@ test_classify_stale_dedup_against_signal() {
   state="$dir/state"
   printf 'done: PR https://x/y/pull/10\n' > "$state/dup-s10.status"
   key=$(printf '%s' "dup-s10" | tr ':/.' '___')
-  printf 'done: PR https://x/y/pull/10' > "$state/.subsuper-seen-status-$key"
+  mark_status_seen "$state" dup-s10 'done: PR https://x/y/pull/10' 'line:1'
   out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-dup-s10" "$state")
   case "$out" in self\|*) ;; *) fail "stale not deduped against signal: $out" ;; esac
   # Without the seen marker, it should escalate.
@@ -1134,7 +1175,7 @@ test_afk_nonterminal_working_merged_keeps_wedge_aging() {
   printf 'idle prompt $\n' > "$pane"
   key=$(printf '%s' "wishlist-w1" | tr ':/.' '___')
   # Simulate an earlier false-positive escalate that wrote the seen marker.
-  printf '%s' "$incident" > "$state/.subsuper-seen-status-$key"
+  mark_status_seen "$state" wishlist-w1 "$incident" 'line:1'
   out=$(FM_STATE_OVERRIDE="$state" classify_stale "$win" "$state")
   case "$out" in
     self\|*transient*) ;;
@@ -1977,6 +2018,7 @@ test_housekeeping_orca_persistent_stale_resolves_terminal
 test_escalate_batches_into_one_digest
 test_escalate_batch_age_uses_first_append
 test_heartbeat_scan_dedup
+test_legacy_scalar_marker_surfaces_new_terminal_event
 test_catchall_decision_event_fold_and_reopen
 test_catchall_matches_legacy_decision_raw_event
 test_catchall_repeated_scan_injects_once
