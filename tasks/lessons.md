@@ -3,6 +3,7 @@
 - Append-only status consumers must preserve raw event bytes and authoritative event identity through every deduplication boundary.
 - Legacy deduplication records without event identity cannot authoritatively suppress append-only events.
 - Suppression bookkeeping must cover every event exposed by a compound relay, not only the file's current event.
+- Fleet iterators should compose single-file classifiers so targeted consumers never rescan unrelated histories.
 - Synthetic script roots are compatibility contracts: when an entry point gains an unconditional sibling dependency, every historical or isolated fixture must materialize that dependency too.
 - Lifecycle E2E fixtures must record a delivery mode consistent with the scratch project's registered posture so teardown tests cleanup rather than a deliberate delivery refusal.
 - Per-home E2E teardown fixtures must pass the same `FM_HOME` that owned the spawn so endpoint validation and cleanup exercise the real runtime context.

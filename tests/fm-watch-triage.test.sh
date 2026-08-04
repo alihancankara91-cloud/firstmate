@@ -156,7 +156,7 @@ test_stale_is_terminal_classifier() {
 }
 
 test_scan_captain_relevant_statuses_classifier() {
-  local dir state out
+  local dir state out single
   dir=$(make_case classify-scan); state="$dir/state"
   printf 'working: a\n' > "$state/one.status"
   printf 'blocked: no perms\n' > "$state/two.status"
@@ -165,7 +165,10 @@ test_scan_captain_relevant_statuses_classifier() {
   printf '%s' "$out" | grep -F "two.status" >/dev/null || fail "scan missed a blocked: status"
   printf '%s' "$out" | grep -F "three.status" >/dev/null || fail "scan missed a done: status"
   printf '%s' "$out" | grep -F "one.status" >/dev/null && fail "scan surfaced a benign working: status"
-  pass "scan_captain_relevant_statuses lists only captain-relevant statuses"
+  single=$(scan_captain_relevant_status_file "$state/two.status")
+  printf '%s' "$single" | grep -F "two.status" >/dev/null || fail "single-file scan missed its blocked status"
+  printf '%s' "$single" | grep -F "three.status" >/dev/null && fail "single-file scan folded a sibling status"
+  pass "fleet and single-file scans list only their captain-relevant statuses"
 }
 
 test_classifier_primitives() {

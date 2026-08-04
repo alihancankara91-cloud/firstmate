@@ -593,40 +593,46 @@ stale_is_terminal() {  # <window> <state>
 }
 
 # Print "<file>\t<task>\t<event-id>\t<event-line>" for every captain-relevant
-# event represented by state/*.status. The whole-stream decision fold keeps an
+# event represented by one status file. The whole-stream decision fold keeps an
 # unresolved decision visible behind unrelated later events, while a verified
 # resolution or captain-held transfer removes it before this scan. The current
 # terminal event is retained as a separate row so a new terminal event is never
 # hidden by an older unresolved decision.
 # No dedup is applied here: each consumer dedupes against its own seen-state (the
-# daemon against .subsuper-seen-status-*, the watcher against .seen-* signatures).
-scan_captain_relevant_statuses() {  # <state>
-  local state=$1 f task open key verb note line_no event_id event_line open_ids
+# daemon against .subsuper-seen-status-*, the watcher against .hb-surfaced-*).
+scan_captain_relevant_status_file() {  # <status-file>
+  local f=$1 task open key verb note line_no event_id event_line open_ids
   local last_info last_no last
-  for f in "$state"/*.status; do
-    [ -e "$f" ] || continue
-    task=$(basename "$f"); task="${task%.status}"
-    open_ids=''
-    open=$(status_open_decision_events "$f")
-    while IFS=$'\t' read -r key verb note line_no event_line; do
-      [ -n "$key" ] || continue
-      event_id="decision:${key}:${line_no}"
-      printf '%s\t%s\t%s\t%s\n' "$f" "$task" "$event_id" "$event_line"
-      open_ids="${open_ids}|${event_id}|"
-    done <<EOF
+  [ -e "$f" ] || return 0
+  task=$(basename "$f"); task="${task%.status}"
+  open_ids=''
+  open=$(status_open_decision_events "$f")
+  while IFS=$'\t' read -r key verb note line_no event_line; do
+    [ -n "$key" ] || continue
+    event_id="decision:${key}:${line_no}"
+    printf '%s\t%s\t%s\t%s\n' "$f" "$task" "$event_id" "$event_line"
+    open_ids="${open_ids}|${event_id}|"
+  done <<EOF
 $open
 EOF
 
-    last_info=$(status_last_event_info "$f")
-    [ -n "$last_info" ] || continue
-    last_no=${last_info%%$'\t'*}
-    last=${last_info#*$'\t'}
-    status_is_captain_relevant "$last" || continue
-    event_id=$(status_event_identity "$last_no" "$last")
-    case "$open_ids" in
-      *"|${event_id}|"*) : ;;
-      *) printf '%s\t%s\t%s\t%s\n' "$f" "$task" "${event_id}" "$last" ;;
-    esac
+  last_info=$(status_last_event_info "$f")
+  [ -n "$last_info" ] || return 0
+  last_no=${last_info%%$'\t'*}
+  last=${last_info#*$'\t'}
+  status_is_captain_relevant "$last" || return 0
+  event_id=$(status_event_identity "$last_no" "$last")
+  case "$open_ids" in
+    *"|${event_id}|"*) : ;;
+    *) printf '%s\t%s\t%s\t%s\n' "$f" "$task" "${event_id}" "$last" ;;
+  esac
+}
+
+scan_captain_relevant_statuses() {  # <state>
+  local state=$1 f
+  for f in "$state"/*.status; do
+    [ -e "$f" ] || continue
+    scan_captain_relevant_status_file "$f"
   done
   return 0
 }

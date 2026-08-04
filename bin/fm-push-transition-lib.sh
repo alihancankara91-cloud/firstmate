@@ -127,7 +127,7 @@ mark_surfaced() {  # <status-file>
 }
 
 mark_signal_surfaced() {  # <status-or-turn-ended-file>
-  local f=$1 base task statusf decisions_only=0 eventf event_task event_id event_line
+  local f=$1 base task statusf decisions_only=0 _eventf event_task event_id event_line
   base=$(basename "$f")
   case "$base" in
     *.status)
@@ -142,13 +142,12 @@ mark_signal_surfaced() {  # <status-or-turn-ended-file>
     *) return 0 ;;
   esac
   [ -f "$statusf" ] && [ ! -L "$statusf" ] || return 0
-  while IFS=$(printf '\t') read -r eventf event_task event_id event_line; do
-    [ "$eventf" = "$statusf" ] || continue
+  while IFS=$(printf '\t') read -r _eventf event_task event_id event_line; do
     if [ "$decisions_only" -eq 1 ]; then
       case "$event_id" in decision:*) ;; *) continue ;; esac
     fi
     mark_surfaced_event "$event_task" "$event_id" "$event_line"
-  done < <(scan_captain_relevant_statuses "${statusf%/*}")
+  done < <(scan_captain_relevant_status_file "$statusf")
 }
 
 # Act on a fresh actionable transition from a push-capable backend.

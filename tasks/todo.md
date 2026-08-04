@@ -21,6 +21,13 @@
 - [x] Cover zero additional decision surfaces after unrelated progress.
 - [x] Run one focused verification.
 
+# Signal marker scan review
+
+- [x] Reproduce and validate fleet-wide scan amplification per signal record.
+- [x] Extract the shared classifier's single-file event iterator.
+- [x] Route signal marker updates through the single-file iterator.
+- [x] Run one focused verification.
+
 - [x] Reproduce all four current CI check failures through their exact local entry points.
 - [x] Identify the earliest shared divergence in fixtures or runtime behavior.
 - [x] Apply the smallest cross-platform root-cause fix.
