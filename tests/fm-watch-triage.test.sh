@@ -64,6 +64,30 @@ wait_numeric_file() {
   return 1
 }
 
+wait_numeric_at_least() {
+  local file=$1 minimum=$2 limit=${3:-30} i=0 value
+  while [ "$i" -lt "$limit" ]; do
+    value=$(cat "$file" 2>/dev/null || true)
+    case "$value" in
+      ''|*[!0-9]*) ;;
+      *) [ "$value" -ge "$minimum" ] && return 0 ;;
+    esac
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+wait_absent() {
+  local file=$1 limit=${2:-30} i=0
+  while [ "$i" -lt "$limit" ]; do
+    [ -e "$file" ] || return 0
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # Portable mtime in epoch seconds. Platform-detected, never the `stat -f || stat -c`
 # fallback (which writes a partial filesystem dump on Linux; see fm-watch.sh).
 file_mtime() {
@@ -142,7 +166,7 @@ test_stale_is_terminal_classifier() {
 }
 
 test_scan_captain_relevant_statuses_classifier() {
-  local dir state out
+  local dir state out single
   dir=$(make_case classify-scan); state="$dir/state"
   printf 'working: a\n' > "$state/one.status"
   printf 'blocked: no perms\n' > "$state/two.status"
@@ -151,7 +175,10 @@ test_scan_captain_relevant_statuses_classifier() {
   printf '%s' "$out" | grep -F "two.status" >/dev/null || fail "scan missed a blocked: status"
   printf '%s' "$out" | grep -F "three.status" >/dev/null || fail "scan missed a done: status"
   printf '%s' "$out" | grep -F "one.status" >/dev/null && fail "scan surfaced a benign working: status"
-  pass "scan_captain_relevant_statuses lists only captain-relevant statuses"
+  single=$(scan_captain_relevant_status_file "$state/two.status")
+  printf '%s' "$single" | grep -F "two.status" >/dev/null || fail "single-file scan missed its blocked status"
+  printf '%s' "$single" | grep -F "three.status" >/dev/null && fail "single-file scan folded a sibling status"
+  pass "fleet and single-file scans list only their captain-relevant statuses"
 }
 
 test_classifier_primitives() {
@@ -443,7 +470,8 @@ test_actionable_signal_surfaced() {
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the actionable signal failed"
   grep "$(printf '\tsignal\t')" "$drain_out" | grep -F "fm-escalation-v1:task:default:needs-decision:$encoded" >/dev/null \
     || fail "legacy decision queue row lost its exact content"
-  [ -s "$state/.hb-surfaced-task" ] || fail "actionable signal did not record the surfaced marker"
+  grep -F "$(printf 'decision:default:2\tneeds-decision: pick A or B')" "$state/.hb-surfaced-task" >/dev/null \
+    || fail "actionable signal did not record the surfaced event identity"
   pass "captain-relevant signal is surfaced (queue + exit) and marked surfaced"
 }
 
@@ -717,7 +745,7 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
 # must surface once, while the unchanged hash must not append the same wake on
 # every watcher re-arm.
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
-  local dir state fakebin out capture_file statusf window key pane_hash sig pid back round wakes bare
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid back round before wakes bare
   dir=$(make_case exited-declared-pause); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held.status"
   window="test:fm-held"
@@ -735,12 +763,15 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
 
   round=1
   while [ "$round" -le 6 ]; do
+    before=$(cat "$state/.count-$key")
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
       FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_FAKE_CREW_STATE='state: stopped · source: pane · bare shell' \
       FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
       FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
     pid=$!
-    if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "dead-agent watcher round $round failed"; fi
+    wait_numeric_at_least "$state/.count-$key" $((before + 1)) 100 \
+      || { reap "$pid"; fail "dead-agent watcher round $round never reached pane classification"; }
+    if wait_live "$pid" 10; then reap "$pid"; else wait "$pid" || fail "dead-agent watcher round $round failed"; fi
     round=$((round + 1))
   done
   wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue")
@@ -887,9 +918,11 @@ test_secondmate_unpause_clears_pause_tracking() {
   : > "$state/.stale-$key"
   : > "$state/.stale-since-$key"
   : > "$state/.wedge-escalations-$key"
-  watch_bg "$state" "$fakebin" "$out"
+  FM_FAKE_TMUX_WINDOW="$window" watch_bg "$state" "$fakebin" "$out"
   pid=$!
-  wait_live "$pid" 20 || fail "watcher exited while reconciling a resumed secondmate: $(cat "$out")"
+  wait_absent "$state/.paused-$key" 100 \
+    || { reap "$pid"; fail "watcher did not reconcile a resumed secondmate: $(cat "$out")"; }
+  kill -0 "$pid" 2>/dev/null || fail "watcher exited while reconciling a resumed secondmate: $(cat "$out")"
   [ ! -e "$state/.paused-$key" ] || { reap "$pid"; fail "resumed secondmate retained the pause marker"; }
   [ ! -e "$state/.stale-$key" ] || { reap "$pid"; fail "resumed secondmate retained stale tracking"; }
   [ ! -e "$state/.wedge-escalations-$key" ] || { reap "$pid"; fail "resumed secondmate retained wedge tracking"; }
@@ -1736,7 +1769,7 @@ test_heartbeat_backstop_surfaces_unsurfaced_status() {
   wait_for_exit "$pid" 40 || fail "heartbeat backstop did not surface an unsurfaced captain-relevant status"
   grep -Fx "heartbeat" "$out" >/dev/null || fail "backstop did not exit with a heartbeat wake"
   grep -F "fm-escalation-v1:" "$out" >/dev/null && fail "ordinary done heartbeat became a captain escalation relay"
-  [ "$(cat "$state/.hb-surfaced-miss" 2>/dev/null || true)" = "done: PR https://example.test/pr/5" ] \
+  grep -F "$(printf 'line:1\tdone: PR https://example.test/pr/5')" "$state/.hb-surfaced-miss" >/dev/null \
     || fail "backstop did not record the status as surfaced (would re-fire next heartbeat)"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the backstop heartbeat failed"
   grep "$(printf '\theartbeat\t')" "$drain_out" >/dev/null || fail "backstop heartbeat was not queued"
@@ -1765,6 +1798,38 @@ test_heartbeat_backstop_promotes_missed_escalation_to_signal() {
   grep "$(printf '\theartbeat\t')" "$drain_out" >/dev/null \
     && fail "heartbeat-promoted escalation also queued an ordinary heartbeat"
   pass "heartbeat backstop promotes missed decisions to exact-content signal relays"
+}
+
+test_signal_batch_keeps_folded_decision_quiet_after_progress() {
+  local dir state fakebin first_out second_out drain_out status_file pid sig
+  dir=$(make_case signal-folded-decision-dedup); state="$dir/state"; fakebin="$dir/fakebin"
+  first_out="$dir/first-watch.out"; second_out="$dir/second-watch.out"; drain_out="$dir/drain.out"
+  status_file="$state/task.status"
+  touch "$state/.last-check"
+  printf 'needs-decision [key=route]: pick A\ndone: report ready\n' > "$status_file"
+  watch_bg "$state" "$fakebin" "$first_out"
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "signal batch with a folded decision did not surface"
+  grep -F 'fm-escalation-v1:task:route:needs-decision:' "$first_out" >/dev/null \
+    || fail "signal batch omitted the folded decision"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "folded decision signal drain failed"
+  grep -F "$(printf 'decision:route:1\tneeds-decision [key=route]: pick A')" "$state/.hb-surfaced-task" >/dev/null \
+    || fail "signal batch did not mark its folded decision as surfaced"
+  grep -F "$(printf 'line:2\tdone: report ready')" "$state/.hb-surfaced-task" >/dev/null \
+    || fail "signal batch did not mark its terminal event as surfaced"
+
+  printf 'working: benign progress\n' >> "$status_file"
+  sig=$(seen_sig "$status_file"); printf '%s' "$sig" > "$state/.seen-task_status"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=1 "$WATCH" > "$second_out" &
+  pid=$!
+  if ! wait_numeric_at_least "$state/.heartbeat-streak" 2 150; then
+    reap "$pid"; fail "later progress caused the surfaced open decision to re-fire: $(cat "$second_out")"
+  fi
+  [ ! -s "$second_out" ] || { reap "$pid"; fail "quiet heartbeat printed a repeated decision wake"; }
+  [ ! -s "$state/.wake-queue" ] || { reap "$pid"; fail "quiet heartbeat queued a repeated decision wake"; }
+  reap "$pid"
+  pass "signal batches mark folded decisions and later heartbeats stay quiet"
 }
 
 # --- beacon stays fresh while absorbing -------------------------------------
@@ -1901,6 +1966,7 @@ test_procevent_marker_failure_exits_and_replays
 test_heartbeat_no_change_absorbed
 test_heartbeat_backstop_surfaces_unsurfaced_status
 test_heartbeat_backstop_promotes_missed_escalation_to_signal
+test_signal_batch_keeps_folded_decision_quiet_after_progress
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale

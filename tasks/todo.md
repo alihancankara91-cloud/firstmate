@@ -1,5 +1,33 @@
 # CI behavior failure fixes
 
+# Away catch-all review fixes
+
+- [x] Reproduce and validate watcher identity and legacy normalization findings.
+- [x] Preserve raw opening events and watcher event identities.
+- [x] Add regression coverage for both deduplication paths.
+- [x] Run one focused verification.
+
+# Legacy terminal marker review
+
+- [x] Reproduce and validate same-text terminal suppression by scalar markers.
+- [x] Make scalar markers non-authoritative until the next surfaced event.
+- [x] Add signal and catch-all migration and deduplication coverage.
+- [x] Run one focused verification.
+
+# Signal fold marker review
+
+- [x] Reproduce and validate folded-decision re-emission after a signal batch.
+- [x] Mark every status event exposed by an actionable signal relay.
+- [x] Cover zero additional decision surfaces after unrelated progress.
+- [x] Run one focused verification.
+
+# Signal marker scan review
+
+- [x] Reproduce and validate fleet-wide scan amplification per signal record.
+- [x] Extract the shared classifier's single-file event iterator.
+- [x] Route signal marker updates through the single-file iterator.
+- [x] Run one focused verification.
+
 - [x] Reproduce all four current CI check failures through their exact local entry points.
 - [x] Identify the earliest shared divergence in fixtures or runtime behavior.
 - [x] Apply the smallest cross-platform root-cause fix.

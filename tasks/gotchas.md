@@ -69,3 +69,12 @@
 - A multi-file review patch missed the Herdr launcher fixture because the target command carried an inline environment prefix.
 - Re-read exact target lines before applying a cross-file patch.
 - Search the entire focused test for old lifecycle assertions after changing a shared terminal-state invariant.
+
+# Review reproduction cleanup
+
+- The command guard rejects recursive `rm` even for a worktree-local temporary fixture, so review reproductions should use the permitted evidence directory without inline destructive cleanup.
+- New-file-content hunks in a multi-file patch need explicit context or a separate patch operation.
+- After changing shared classifier helpers, inspect an early watcher-suite failure's isolated log before attributing it to the targeted heartbeat path.
+- Watcher tests need to isolate browser-reaper startup work globally instead of lengthening each wake assertion independently.
+- Extracted Bash tests executed from stdin must rewrite `BASH_SOURCE`-relative helper loads to absolute paths under `set -u`.
+- Watcher fixtures must wait for an observable scan-state transition instead of assuming startup maintenance will finish inside a short wall-clock liveness window.

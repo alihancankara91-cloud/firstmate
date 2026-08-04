@@ -162,7 +162,7 @@ test_stale_diagnostic_wedge_survives_busy_housekeeping() {
     key=$(printf '%s' "$task" | tr ':/.' '___')
     echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
     [ "$case_name" = prior-terminal ] \
-      && printf '%s' "$status_line" > "$state/.subsuper-seen-status-$key"
+      && mark_status_seen "$state" "$task" "$status_line" 'line:1'
     [ "$case_name" = paused ] \
       && echo $(( $(date +%s) - 500 )) > "$state/.subsuper-paused-$key"
 
@@ -645,6 +645,166 @@ test_heartbeat_scan_dedup() {
   pass "catch-all scan escalates a missed terminal once, not twice"
 }
 
+test_legacy_scalar_marker_surfaces_new_terminal_event() {
+  local dir state status marker catch_status catch_marker out
+  dir=$(make_supercase legacy-scalar-new-terminal)
+  state="$dir/state"
+  status="$state/task.status"
+  marker="$state/.subsuper-seen-status-task"
+  printf 'done: ready\ndone: ready\n' > "$status"
+  printf 'done: ready' > "$marker"
+
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$status" "$state")
+  case "$out" in
+    escalate\|*) ;;
+    *) fail "legacy scalar marker hid a same-text new terminal signal: $out" ;;
+  esac
+  [ "$(cat "$marker")" = 'done: ready' ] \
+    || fail "classification migrated the scalar marker before surfacing"
+
+  FM_STATE_OVERRIDE="$state" handle_wake "signal: $status" "$state"
+  grep -F "$(printf 'line:2\tdone: ready')" "$marker" >/dev/null \
+    || fail "surfaced terminal did not migrate the scalar marker to its event identity"
+  out=$(FM_STATE_OVERRIDE="$state" classify_signal "$status" "$state")
+  case "$out" in
+    self\|*) ;;
+    *) fail "identified terminal event was not deduplicated after migration: $out" ;;
+  esac
+
+  catch_status="$state/catch.status"
+  catch_marker="$state/.subsuper-seen-status-catch"
+  printf 'done: catch-all ready\ndone: catch-all ready\n' > "$catch_status"
+  printf 'done: catch-all ready' > "$catch_marker"
+  : > "$state/.subsuper-escalations"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  grep -F 'catch.status: done: catch-all ready' "$state/.subsuper-escalations" >/dev/null \
+    || fail "legacy scalar marker hid a same-text new terminal catch-all event"
+  grep -F "$(printf 'line:2\tdone: catch-all ready')" "$catch_marker" >/dev/null \
+    || fail "catch-all surface did not migrate the scalar marker to its event identity"
+  pass "legacy scalar markers surface new signal and catch-all terminals before migration"
+}
+
+test_catchall_decision_event_fold_and_reopen() {
+  local dir state status line
+  dir=$(make_supercase catchall-decision-fold)
+  state="$dir/state"
+  status="$state/decision.status"
+  line='needs-decision [key=route]: need=choose route | options=north; south | recommend=north'
+  printf '%s\nworking: unrelated follow-up\n' "$line" > "$status"
+  : > "$state/.wake-queue"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  grep -F 'needs-decision [key=route]' "$state/.subsuper-escalations" >/dev/null \
+    || fail "initial unresolved decision did not surface through the catch-all fold"
+
+  : > "$state/.subsuper-escalations"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "repeated catch-all scan re-emitted an already surfaced decision"
+
+  printf 'captain-held [key=route]: tracked by decision-decision-route\n' >> "$status"
+  [ -z "$(status_open_decisions "$status")" ] \
+    || fail "captain-held status did not close the authoritative open decision fold"
+  : > "$state/.subsuper-escalations"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "captain-held decision was re-emitted by the catch-all scan"
+
+  printf '%s\n' "$line" >> "$status"
+  : > "$state/.subsuper-escalations"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  grep -F 'needs-decision [key=route]' "$state/.subsuper-escalations" >/dev/null \
+    || fail "same-key reopened decision with identical content did not surface"
+
+  : > "$state/.subsuper-escalations"
+  printf 'needs-decision [key=distinct]: need=choose access | options=open; closed | recommend=closed\n' >> "$status"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  grep -F 'needs-decision [key=distinct]' "$state/.subsuper-escalations" >/dev/null \
+    || fail "distinct decision key did not surface"
+
+  : > "$state/.subsuper-escalations"
+  printf 'resolved [key=route]: captain chose north\n' >> "$status"
+  printf 'needs-decision [key=route]: need=choose route again | options=north; south | recommend=south\n' >> "$status"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  grep -F 'choose route again' "$state/.subsuper-escalations" >/dev/null \
+    || fail "a decision recurring after resolution did not surface"
+
+  : > "$state/.subsuper-escalations"
+  printf 'done: PR https://example.test/pull/22 checks green\n' >> "$status"
+  rm -f "$state/.subsuper-last-scan"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  grep -F 'done: PR https://example.test/pull/22 checks green' "$state/.subsuper-escalations" >/dev/null \
+    || fail "a new terminal event was hidden by an unresolved decision"
+  pass "catch-all folds decisions, suppresses repeats, honors captain-held, reopens, and preserves terminal events"
+}
+
+test_catchall_matches_legacy_decision_raw_event() {
+  local dir state status identity line
+  dir=$(make_supercase catchall-legacy-raw-event)
+  state="$dir/state"
+  status="$state/legacy.status"
+  line='needs-decision:pick A'
+  printf '%s\nworking: benign progress\n' "$line" > "$status"
+  identity='decision:default:1'
+  mark_status_seen "$state" legacy "$line" "$identity"
+  FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=999999 \
+    housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "catch-all normalized and re-emitted an already surfaced legacy decision"
+  pass "catch-all preserves legacy decision event bytes for deduplication"
+}
+
+test_catchall_repeated_scan_injects_once() {
+  local dir state fakebin sent capture status
+  dir=$(make_supercase catchall-injection)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  sent="$dir/sent.log"; capture="$dir/pane.txt"; status="$state/inject.status"
+  : > "$sent"; : > "$capture"
+  printf 'needs-decision [key=route]: need=choose route | options=north; south | recommend=north\n' > "$status"
+  afk_enter "$state"
+  for _ in 1 2 3 4; do
+    rm -f "$state/.subsuper-last-scan"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
+      FM_FAKE_TMUX_CAPTURE="$capture" FM_SUPERVISOR_BACKEND=tmux \
+      FM_SUPERVISOR_TARGET=firstmate:0 FM_STATE_OVERRIDE="$state" \
+      FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=0 FM_INJECT_CONFIRM_SLEEP=0 \
+      housekeeping "$state"
+  done
+  [ "$(grep -c '\[ENTER\]' "$sent" 2>/dev/null || true)" -eq 1 ] \
+    || fail "repeated catch-all cycles generated more than one supervisor injection"
+  pass "repeated catch-all cycles produce one injection for one unresolved decision"
+}
+
+test_silent_wakes_never_inject() {
+  local dir state sent capture
+  dir=$(make_supercase silent-wakes)
+  state="$dir/state"; sent="$dir/sent.log"; capture="$dir/pane.txt"
+  : > "$sent"; : > "$capture"; : > "$state/.wake-queue"
+  afk_enter "$state"
+  for _ in 1 2 3 4; do
+    FM_STATE_OVERRIDE="$state" FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=0 \
+      handle_wake heartbeat "$state"
+    PATH="$dir/fakebin:$PATH" FM_FAKE_TMUX_PANE_ALIVE=1 FM_FAKE_TMUX_SENT="$sent" \
+      FM_FAKE_TMUX_CAPTURE="$capture" FM_STATE_OVERRIDE="$state" \
+      FM_HEARTBEAT_SCAN_SECS=0 FM_ESCALATE_BATCH_SECS=0 housekeeping "$state"
+  done
+  [ ! -s "$sent" ] || fail "silent wakes generated an outgoing supervisor message"
+  pass "four silent wakes generate zero outgoing supervisor messages"
+}
+
 test_handle_wake_routes_self_and_escalate() {
   local dir state
   dir=$(make_supercase handle)
@@ -699,15 +859,15 @@ test_terminal_stale_escalate_leaves_no_marker() {
 }
 
 test_signal_escalate_marks_seen_no_catchall_refire() {
-  local dir state key
+  local dir state identity
   dir=$(make_supercase signal-seen)
   state="$dir/state"
   printf 'done: PR https://x/y/pull/8\n' > "$state/sig-t8.status"
   FM_STATE_OVERRIDE="$state" handle_wake "signal: $state/sig-t8.status" "$state"
   [ -s "$state/.subsuper-escalations" ] || fail "captain signal was not escalated"
-  key=$(printf '%s' "sig-t8" | tr ':/.' '___')
-  [ "$(cat "$state/.subsuper-seen-status-$key" 2>/dev/null || true)" = "done: PR https://x/y/pull/8" ] \
-    || fail "captain signal escalate did not write the seen-status marker"
+  identity=$(status_current_event_identity "$state/sig-t8.status")
+  status_seen_matches "$state" sig-t8 "$identity" 'done: PR https://x/y/pull/8' \
+    || fail "captain signal escalate did not write the event-aware seen marker"
   : > "$state/.subsuper-escalations"
   rm -f "$state/.subsuper-last-scan"
   FM_STATE_OVERRIDE="$state" housekeeping "$state"
@@ -971,7 +1131,7 @@ test_classify_signal_dedup_against_scan() {
   printf 'done: PR https://x/y/pull/9\n' > "$state/dup-s9.status"
   # Simulate the catch-all scan having already escalated this status.
   key=$(printf '%s' "dup-s9" | tr ':/.' '___')
-  printf 'done: PR https://x/y/pull/9' > "$state/.subsuper-seen-status-$key"
+  mark_status_seen "$state" dup-s9 'done: PR https://x/y/pull/9' 'line:1'
   out=$(FM_STATE_OVERRIDE="$state" classify_signal "$state/dup-s9.status" "$state")
   case "$out" in self\|*) ;; *) fail "signal not deduped against scan: $out" ;; esac
   # Without the seen marker, it should escalate.
@@ -989,7 +1149,7 @@ test_classify_stale_dedup_against_signal() {
   state="$dir/state"
   printf 'done: PR https://x/y/pull/10\n' > "$state/dup-s10.status"
   key=$(printf '%s' "dup-s10" | tr ':/.' '___')
-  printf 'done: PR https://x/y/pull/10' > "$state/.subsuper-seen-status-$key"
+  mark_status_seen "$state" dup-s10 'done: PR https://x/y/pull/10' 'line:1'
   out=$(FM_STATE_OVERRIDE="$state" classify_stale "sess:fm-dup-s10" "$state")
   case "$out" in self\|*) ;; *) fail "stale not deduped against signal: $out" ;; esac
   # Without the seen marker, it should escalate.
@@ -1015,7 +1175,7 @@ test_afk_nonterminal_working_merged_keeps_wedge_aging() {
   printf 'idle prompt $\n' > "$pane"
   key=$(printf '%s' "wishlist-w1" | tr ':/.' '___')
   # Simulate an earlier false-positive escalate that wrote the seen marker.
-  printf '%s' "$incident" > "$state/.subsuper-seen-status-$key"
+  mark_status_seen "$state" wishlist-w1 "$incident" 'line:1'
   out=$(FM_STATE_OVERRIDE="$state" classify_stale "$win" "$state")
   case "$out" in
     self\|*transient*) ;;
@@ -1858,6 +2018,11 @@ test_housekeeping_orca_persistent_stale_resolves_terminal
 test_escalate_batches_into_one_digest
 test_escalate_batch_age_uses_first_append
 test_heartbeat_scan_dedup
+test_legacy_scalar_marker_surfaces_new_terminal_event
+test_catchall_decision_event_fold_and_reopen
+test_catchall_matches_legacy_decision_raw_event
+test_catchall_repeated_scan_injects_once
+test_silent_wakes_never_inject
 test_handle_wake_routes_self_and_escalate
 test_inject_skip_forces_self
 test_is_wake_reason_distinguishes_status_stdout

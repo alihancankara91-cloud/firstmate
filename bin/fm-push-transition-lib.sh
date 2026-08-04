@@ -106,14 +106,48 @@ _hb_surfaced_path() {
   printf '%s/.hb-surfaced-%s' "$STATE" "$(printf '%s' "$1" | tr ':/.' '___')"
 }
 
+hb_surfaced_matches() {  # <task> <event-id> <event-line>
+  status_event_marker_matches "$(_hb_surfaced_path "$1")" "$2" "$3"
+}
+
+mark_surfaced_event() {  # <task> <event-id> <event-line>
+  status_event_marker_add "$(_hb_surfaced_path "$1")" "$2" "$3"
+}
+
 # Record a captain-relevant status after its durable wake has been enqueued.
 mark_surfaced() {  # <status-file>
-  local f=$1 task last
+  local f=$1 task last identity
   task=$(basename "$f"); task="${task%.status}"
   last=$(last_status_line "$f")
   [ -n "$last" ] || return 0
   status_is_captain_relevant "$last" || return 0
-  printf '%s' "$last" > "$(_hb_surfaced_path "$task")"
+  identity=$(status_current_event_identity "$f" 2>/dev/null || true)
+  [ -n "$identity" ] || return 0
+  mark_surfaced_event "$task" "$identity" "$last"
+}
+
+mark_signal_surfaced() {  # <status-or-turn-ended-file>
+  local f=$1 base task statusf decisions_only=0 _eventf event_task event_id event_line
+  base=$(basename "$f")
+  case "$base" in
+    *.status)
+      task=${base%.status}
+      statusf=$f
+      ;;
+    *.turn-ended)
+      task=${base%.turn-ended}
+      statusf=${f%/*}/$task.status
+      decisions_only=1
+      ;;
+    *) return 0 ;;
+  esac
+  [ -f "$statusf" ] && [ ! -L "$statusf" ] || return 0
+  while IFS=$(printf '\t') read -r _eventf event_task event_id event_line; do
+    if [ "$decisions_only" -eq 1 ]; then
+      case "$event_id" in decision:*) ;; *) continue ;; esac
+    fi
+    mark_surfaced_event "$event_task" "$event_id" "$event_line"
+  done < <(scan_captain_relevant_status_file "$statusf")
 }
 
 # Act on a fresh actionable transition from a push-capable backend.

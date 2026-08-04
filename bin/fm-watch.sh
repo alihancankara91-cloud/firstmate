@@ -628,31 +628,30 @@ run_check_capture() {
 
 # Surfaced-marker bookkeeping for the heartbeat backstop is owned by
 # fm-push-transition-lib.sh because push and poll paths must write one format.
-# Mark every current captain-relevant status as surfaced. Called after the
-# heartbeat backstop enqueues its wake, so the same statuses are not re-surfaced
-# by the next heartbeat.
+# Mark every captain-relevant event represented by the current status folds as
+# surfaced. Called after the heartbeat backstop enqueues its wake, so the same
+# events are not re-surfaced by the next heartbeat.
 mark_all_captain_relevant_surfaced() {
-  local f task last
-  while IFS=$(printf '\t') read -r f task last; do
+  local f task event_id event_line
+  while IFS=$(printf '\t') read -r f task event_id event_line; do
     [ -n "$f" ] || continue
-    printf '%s' "$last" > "$(_hb_surfaced_path "$task")"
+    mark_surfaced_event "$task" "$event_id" "$event_line"
   done < <(scan_captain_relevant_statuses "$STATE")
 }
 
 # Cheap heartbeat fleet-scan (the always-on twin of the daemon's catch-all). 0 if
-# any captain-relevant status has NOT already been surfaced to firstmate (its
-# content differs from the .hb-surfaced-<task> marker). Pure detect, no side
-# effects: the caller enqueues first, then marks surfaced. Because every
-# captain-relevant signal/stale already marks itself surfaced when it wakes
-# firstmate, this normally finds nothing and the heartbeat is absorbed; it
+# any captain-relevant event has NOT already been surfaced to firstmate (its
+# identity and exact text do not match the .hb-surfaced-<task> marker). Pure
+# detect, no side effects: the caller enqueues first, then marks surfaced.
+# Because every captain-relevant signal/stale already marks itself surfaced when
+# it wakes firstmate, this normally finds nothing and the heartbeat is absorbed; it
 # surfaces only a captain-relevant status the per-wake path absorbed by mistake -
 # the fail-safe backstop.
 heartbeat_scan_finds_actionable() {
-  local f task last surfaced
-  while IFS=$(printf '\t') read -r f task last; do
+  local f task event_id event_line
+  while IFS=$(printf '\t') read -r f task event_id event_line; do
     [ -n "$f" ] || continue
-    surfaced=$(cat "$(_hb_surfaced_path "$task")" 2>/dev/null || true)
-    [ "$surfaced" = "$last" ] && continue
+    hb_surfaced_matches "$task" "$event_id" "$event_line" && continue
     return 0
   done < <(scan_captain_relevant_statuses "$STATE")
   return 1
@@ -663,11 +662,10 @@ heartbeat_scan_finds_actionable() {
 # signal wake so the same exact-content relay path handles a missed status edge;
 # done/failed and other ordinary heartbeat findings remain heartbeat wakes.
 heartbeat_unsurfaced_escalation_files() {
-  local f task last surfaced
-  while IFS=$(printf '\t') read -r f task last; do
+  local f task event_id event_line
+  while IFS=$(printf '\t') read -r f task event_id event_line; do
     [ -n "$f" ] || continue
-    surfaced=$(cat "$(_hb_surfaced_path "$task")" 2>/dev/null || true)
-    [ "$surfaced" = "$last" ] && continue
+    hb_surfaced_matches "$task" "$event_id" "$event_line" && continue
     [ -n "$(status_open_decisions "$f")" ] || continue
     printf '%s\n' "$f"
   done < <(scan_captain_relevant_statuses "$STATE")
@@ -971,7 +969,7 @@ EOF
       while IFS=$(printf '\t') read -r sf sig f; do
         [ -n "$sf" ] || continue
         printf '%s' "$sig" > "$sf"
-        mark_surfaced "$f"
+        mark_signal_surfaced "$f"
       done <<EOF
 $pending
 EOF

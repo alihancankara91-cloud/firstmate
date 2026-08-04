@@ -166,9 +166,10 @@ Classify each wake this way:
   If the pane is still idle past `FM_STALE_ESCALATE_SECS` (default 240s), housekeeping escalates it as a possible wedge.
   This bounds wedge-detection latency to the threshold plus a tick: a delay, never a loss.
   Healthy crewmates are autonomous and do not wait on firstmate mid-task.
-- `heartbeat` -> self-handle. The daemon runs its own cheap bash fleet scan
-  every `FM_HEARTBEAT_SCAN_SECS` (default 300s) as the catch-all for a
-  captain-relevant status line the per-wake classifier might miss.
+- `heartbeat` -> self-handle.
+  Every `FM_HEARTBEAT_SCAN_SECS` (default 300s), the daemon scans each append-only status stream for still-open keyed decisions and its current terminal event as a catch-all for events the per-wake classifier might miss.
+  A matching `resolved` or verified `captain-held` event closes that decision before the scan, while per-event surfaced markers suppress only the identical opening or terminal event.
+  Distinct keys, changed or reopened decisions, and later terminal events therefore remain independently actionable.
 - Unknown reason, or any uncertainty -> escalate fail-safe.
 
 Escalations are buffered up to `FM_ESCALATE_BATCH_SECS` (default 90s; 0 =
@@ -211,7 +212,8 @@ the operational prefix lets firstmate distinguish it from a real captain message
   text firstmate sees is clean.
 - **Portable singleton lock** - the daemon uses the repo's portable lock helper
   (`fm-wake-lib.sh`) instead of `flock`, which is absent on macOS.
-- **Dedupe across signal/stale/scan** - `classify_signal` and terminal `classify_stale` paths check the seen-status marker before escalating, so a captain-relevant status escalated by one path is not re-escalated by another in the same digest.
+- **Dedupe across signal/stale/scan** - signal, terminal-stale, and catch-all paths share event identities and exact event text in per-task seen markers, so one path cannot re-escalate the same event through another path or a later empty scan.
+  A reopened decision receives a new opening identity even when its text is unchanged, and a legacy line-only marker is non-authoritative until the next surfaced event replaces it.
   The marker does not clear or suppress possible-wedge aging for a nonterminal progress line.
 - **Auto-discovered supervisor pane** - the daemon resolves its own BACKEND
   (tmux vs herdr) and TARGET independently, mirroring
@@ -243,7 +245,7 @@ These properties must hold:
   or crashed injection.
 - Wedge detection is bounded-latency, not lossy.
 - Declared external waits are rechecked on a separate, bounded cadence rather than being mislabeled as wedges.
-- The catch-all scan backs up the keyword classifier.
+- The catch-all scan backs up per-wake classification without repeating events already surfaced or authoritatively closed.
 - The daemon preserves a single-instance portable lock, crash-loop backoff,
   a pane-gone guard, and a signal-trapped shutdown that flushes buffered
   escalations before exit.
